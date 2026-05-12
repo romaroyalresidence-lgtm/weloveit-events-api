@@ -1,0 +1,2 @@
+# Zero-dependency prototype.
+# No external Python packages required.
