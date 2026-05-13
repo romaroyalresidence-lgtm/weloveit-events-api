@@ -235,11 +235,12 @@ def get_predict_score(event):
         print("Predict API error:", exc)
         return calculate_ai_score(event)
 
-def get_ticketmaster_events(city="", from_date="", to_date="", category="", size=80):
+def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
     if not TICKETMASTER_API_KEY:
         return []
 
     normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
 
     params = {
         "apikey": TICKETMASTER_API_KEY,
@@ -249,7 +250,10 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
 
     if normalized_city:
         params["city"] = normalized_city
-
+        
+    if country_code:
+    params["countryCode"] = country_code
+    
     if from_date:
         params["startDateTime"] = f"{from_date}T00:00:00Z"
 
@@ -393,18 +397,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/events":
-            city = query.get("city", query.get("destination", [""]))[0]
-            from_date = query.get("from_date", [""])[0]
-            to_date = query.get("to_date", [""])[0]
-            category = query.get("category", [""])[0]
+           city = query.get("city", query.get("destination", [""]))[0]
+           country = query.get("country", query.get("countryCode", [""]))[0]
+           from_date = query.get("from_date", [""])[0]
+           to_date = query.get("to_date", [""])[0]
+           category = query.get("category", [""])[0]
 
             events = get_ticketmaster_events(
-                city=city,
-                from_date=from_date,
-                to_date=to_date,
-                category=category,
-                size=80
-            )
+            city=city,
+            country=country,
+            from_date=from_date,
+            to_date=to_date,
+            category=category,
+            size=80
+)
 
             self.send_json(events)
             return
