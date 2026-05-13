@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -310,8 +310,8 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
             "currency": currency,
             "is_vip_available": False,
             "status": "active",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
         event["ai_score"] = get_predict_score(event)
