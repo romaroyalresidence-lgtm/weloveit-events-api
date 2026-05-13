@@ -252,7 +252,7 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         params["city"] = normalized_city
         
     if country_code:
-    params["countryCode"] = country_code
+        params["countryCode"] = country_code
     
     if from_date:
         params["startDateTime"] = f"{from_date}T00:00:00Z"
@@ -262,6 +262,7 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
 
     if category == "sport":
         params["classificationName"] = "sports"
+        
     elif category == "concert":
         params["classificationName"] = "music"
     elif category == "theatre":
