@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", "8000"))
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
+PREDICT_API_KEY = os.environ.get("PREDICT_API_KEY")
+PREDICT_API_URL = os.environ.get("PREDICT_API_URL")
 
 
 CITY_MAP = {
@@ -161,6 +163,44 @@ def calculate_ai_score(event):
 
     return min(score, 100)
 
+def get_predict_score(event):
+    if not PREDICT_API_KEY or not PREDICT_API_URL:
+        return calculate_ai_score(event)
+
+    payload = json.dumps({
+        "title": event.get("title"),
+        "category": event.get("category"),
+        "subcategory": event.get("subcategory"),
+        "city": event.get("city"),
+        "country": event.get("country"),
+        "venue": event.get("venue"),
+        "start_date": event.get("start_date"),
+        "price_min": event.get("price_min"),
+        "price_max": event.get("price_max"),
+        "currency": event.get("currency"),
+        "source_name": event.get("source_name"),
+    }).encode("utf-8")
+
+    request = Request(
+        PREDICT_API_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {PREDICT_API_KEY}",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        },
+        method="POST"
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        return int(data.get("score", calculate_ai_score(event)))
+
+    except Exception as exc:
+        print("Predict API error:", exc)
+        return calculate_ai_score(event)
 
 def get_ticketmaster_events(city="", from_date="", to_date="", category="", size=80):
     if not TICKETMASTER_API_KEY:
@@ -274,7 +314,7 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
             "updated_at": datetime.utcnow().isoformat(),
         }
 
-        event["ai_score"] = calculate_ai_score(event)
+        event["ai_score"] = get_predict_score(event)
         events.append(event)
 
     events = dedupe_events(events)
