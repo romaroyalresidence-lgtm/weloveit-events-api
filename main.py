@@ -34,9 +34,42 @@ CITY_MAP = {
 }
 
 
-def normalize_city(city):
-    key = (city or "").strip().lower()
-    return CITY_MAP.get(key, city.strip())
+def normalize_country_code(country):
+    key = (country or "").strip().lower()
+
+    country_map = {
+        "it": "IT",
+        "italia": "IT",
+        "italy": "IT",
+
+        "us": "US",
+        "usa": "US",
+        "united states": "US",
+        "stati uniti": "US",
+
+        "gb": "GB",
+        "uk": "GB",
+        "united kingdom": "GB",
+        "regno unito": "GB",
+
+        "fr": "FR",
+        "france": "FR",
+        "francia": "FR",
+
+        "es": "ES",
+        "spain": "ES",
+        "spagna": "ES",
+
+        "de": "DE",
+        "germany": "DE",
+        "germania": "DE",
+
+        "jp": "JP",
+        "japan": "JP",
+        "giappone": "JP",
+    }
+
+    return country_map.get(key, country.strip().upper())
 
 
 def normalize_category(segment):
