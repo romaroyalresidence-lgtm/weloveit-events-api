@@ -74,7 +74,9 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
     for item in raw_events:
         dates = item.get("dates", {}).get("start", {})
         start_date = dates.get("localDate")
-        if not start_date:
+        start_time = dates.get("localTime")
+
+if not start_date:
     continue
 
 if from_date and start_date < from_date:
@@ -82,8 +84,6 @@ if from_date and start_date < from_date:
 
 if to_date and start_date > to_date:
     continue
-        start_time = dates.get("localTime")
-
         venue_data = (
             item.get("_embedded", {})
             .get("venues", [{}])[0]
