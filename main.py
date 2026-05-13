@@ -384,25 +384,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"status": "ok"})
 
     def do_GET(self):
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+    parsed = urlparse(self.path)
+    query = parse_qs(parsed.query)
 
-        if parsed.path == "/health":
-            self.send_json({
-                "status": "ok",
-                "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster",
-                "api_key_present": bool(TICKETMASTER_API_KEY),
-                "version": "ticketmaster-filtered-deduped-v2"
-            })
-            return
+    if parsed.path == "/health":
+        self.send_json({
+            "status": "ok",
+            "service": "WELOVEIT Events API",
+            "provider": "Ticketmaster",
+            "api_key_present": bool(TICKETMASTER_API_KEY),
+            "version": "ticketmaster-filtered-deduped-v2"
+        })
+        return
 
-       if parsed.path == "/events":
-           city = query.get("city", query.get("destination", [""]))[0]
-           country = query.get("country", query.get("countryCode", [""]))[0]
-           from_date = query.get("from_date", [""])[0]
-           to_date = query.get("to_date", [""])[0]
-           category = query.get("category", [""])[0]
+    if parsed.path == "/events":
+        city = query.get("city", query.get("destination", [""]))[0]
+        country = query.get("country", query.get("countryCode", [""]))[0]
+        from_date = query.get("from_date", [""])[0]
+        to_date = query.get("to_date", [""])[0]
+        category = query.get("category", [""])[0]
 
         events = get_ticketmaster_events(
             city=city,
@@ -411,9 +411,12 @@ class Handler(BaseHTTPRequestHandler):
             to_date=to_date,
             category=category,
             size=80
-    )
+        )
 
-    self.send_json(events)
+        self.send_json(events)
+        return
+
+    self.send_json({"error": "not found"}, status=404)
     return
 
             self.send_json(events)
