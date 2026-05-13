@@ -397,21 +397,24 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if parsed.path == "/events":
+       if parsed.path == "/events":
            city = query.get("city", query.get("destination", [""]))[0]
            country = query.get("country", query.get("countryCode", [""]))[0]
            from_date = query.get("from_date", [""])[0]
            to_date = query.get("to_date", [""])[0]
            category = query.get("category", [""])[0]
 
-            events = get_ticketmaster_events(
+        events = get_ticketmaster_events(
             city=city,
             country=country,
             from_date=from_date,
             to_date=to_date,
             category=category,
             size=80
-)
+    )
+
+    self.send_json(events)
+    return
 
             self.send_json(events)
             return
