@@ -5,8 +5,36 @@ from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
 PORT = int(os.environ.get("PORT", "8000"))
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
+
+
+CITY_MAP = {
+    "roma": "Rome",
+    "rome": "Rome",
+    "milano": "Milan",
+    "milan": "Milan",
+    "londra": "London",
+    "london": "London",
+    "parigi": "Paris",
+    "paris": "Paris",
+    "new york": "New York",
+    "ny": "New York",
+    "tokyo": "Tokyo",
+    "madrid": "Madrid",
+    "barcellona": "Barcelona",
+    "barcelona": "Barcelona",
+    "berlino": "Berlin",
+    "berlin": "Berlin",
+    "monaco": "Munich",
+    "munich": "Munich",
+}
+
+
+def normalize_city(city):
+    key = (city or "").strip().lower()
+    return CITY_MAP.get(key, city.strip())
 
 
 def normalize_category(segment):
@@ -27,9 +55,118 @@ def normalize_category(segment):
     return "event"
 
 
-def get_ticketmaster_events(city="", from_date="", to_date="", category="", size=50):
+def clean_text(value):
+    return (value or "").strip().lower()
+
+
+def make_dedupe_key(event):
+    return "|".join([
+        clean_text(event.get("title")),
+        clean_text(event.get("venue")),
+        clean_text(event.get("city")),
+        clean_text(event.get("start_date")),
+    ])
+
+
+def dedupe_events(events):
+    seen = set()
+    unique = []
+
+    for event in events:
+        key = make_dedupe_key(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(event)
+
+    return unique
+
+
+def event_is_in_range(event, from_date="", to_date=""):
+    start_date = event.get("start_date")
+
+    if not start_date:
+        return False
+
+    if from_date and start_date < from_date:
+        return False
+
+    if to_date and start_date > to_date:
+        return False
+
+    return True
+
+
+def get_best_image(images):
+    if not images:
+        return None
+
+    sorted_images = sorted(
+        images,
+        key=lambda img: (img.get("width", 0) * img.get("height", 0)),
+        reverse=True
+    )
+
+    return sorted_images[0].get("url")
+
+
+def calculate_ai_score(event):
+    score = 70
+
+    title = clean_text(event.get("title"))
+    venue = clean_text(event.get("venue"))
+    category = clean_text(event.get("category"))
+
+    premium_words = [
+        "final",
+        "grand prix",
+        "formula 1",
+        "championship",
+        "broadway",
+        "nba",
+        "nhl",
+        "nfl",
+        "ufc",
+        "wimbledon",
+        "world cup",
+        "derby",
+        "concert",
+        "festival",
+        "musical",
+    ]
+
+    iconic_venues = [
+        "wembley",
+        "madison square garden",
+        "royal albert hall",
+        "o2 arena",
+        "tokyo dome",
+        "broadway",
+        "stadio olimpico",
+        "san siro",
+        "camp nou",
+        "santiago bernabeu",
+    ]
+
+    for word in premium_words:
+        if word in title:
+            score += 5
+
+    for place in iconic_venues:
+        if place in venue:
+            score += 5
+
+    if category in ["sport", "concert", "theatre"]:
+        score += 5
+
+    return min(score, 100)
+
+
+def get_ticketmaster_events(city="", from_date="", to_date="", category="", size=80):
     if not TICKETMASTER_API_KEY:
         return []
+
+    normalized_city = normalize_city(city)
 
     params = {
         "apikey": TICKETMASTER_API_KEY,
@@ -37,8 +174,8 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
         "sort": "date,asc",
     }
 
-    if city:
-        params["city"] = city
+    if normalized_city:
+        params["city"] = normalized_city
 
     if from_date:
         params["startDateTime"] = f"{from_date}T00:00:00Z"
@@ -88,6 +225,10 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
         country_name = venue_data.get("country", {}).get("name", "")
         venue_name = venue_data.get("name", "")
 
+        if normalized_city and city_name:
+            if clean_text(city_name) != clean_text(normalized_city):
+                continue
+
         classifications = item.get("classifications", [])
         segment = ""
         genre = ""
@@ -98,10 +239,8 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
 
         mapped_category = normalize_category(segment)
 
-        image_url = None
-        images = item.get("images", [])
-        if images:
-            image_url = images[0].get("url")
+        if category and mapped_category != category:
+            continue
 
         price_min = None
         price_max = None
@@ -113,7 +252,7 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
             price_max = price_ranges[0].get("max")
             currency = price_ranges[0].get("currency")
 
-        events.append({
+        event = {
             "title": item.get("name", "Unknown event"),
             "category": mapped_category,
             "subcategory": genre or segment or "Live event",
@@ -125,18 +264,29 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
             "source_name": "Ticketmaster",
             "source_url": item.get("url"),
             "ticket_url": item.get("url"),
-            "image_url": image_url,
+            "image_url": get_best_image(item.get("images", [])),
             "price_min": price_min,
             "price_max": price_max,
             "currency": currency,
-            "ai_score": 80,
             "is_vip_available": False,
             "status": "active",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-        })
+        }
 
-    return events
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    events = dedupe_events(events)
+    events = [event for event in events if event_is_in_range(event, from_date, to_date)]
+
+    events.sort(key=lambda event: (
+        event.get("start_date") or "",
+        -(event.get("ai_score") or 0),
+        event.get("title") or ""
+    ))
+
+    return events[:50]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -164,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "service": "WELOVEIT Events API",
                 "provider": "Ticketmaster",
-                "api_key_present": bool(TICKETMASTER_API_KEY)
+                "api_key_present": bool(TICKETMASTER_API_KEY),
+                "version": "ticketmaster-filtered-deduped-v2"
             })
             return
 
@@ -179,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
                 from_date=from_date,
                 to_date=to_date,
                 category=category,
-                size=50
+                size=80
             )
 
             self.send_json(events)
