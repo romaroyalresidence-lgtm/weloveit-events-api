@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("PORT", "8000"))
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
 PREDICT_API_KEY = os.environ.get("PREDICT_API_KEY")
-PREDICT_API_URL = os.environ.get("PREDICT_API_URL")
+PREDICT_API_URL = os.environ.get("PREDICT_API_URL", "https://api.predicthq.com/v1/events/")
 
 
 CITY_MAP = {
@@ -34,6 +34,14 @@ CITY_MAP = {
 }
 
 
+PREDICTHQ_CATEGORY_MAP = {
+    "concert": "concerts,festivals,performing-arts",
+    "sport": "sports",
+    "theatre": "performing-arts",
+    "culture": "performing-arts,community,festivals,expos",
+}
+
+
 def normalize_city(city):
     key = (city or "").strip().lower()
     return CITY_MAP.get(key, city.strip())
@@ -46,29 +54,23 @@ def normalize_country_code(country):
         "it": "IT",
         "italia": "IT",
         "italy": "IT",
-
         "us": "US",
         "usa": "US",
         "united states": "US",
         "stati uniti": "US",
-
         "gb": "GB",
         "uk": "GB",
         "united kingdom": "GB",
         "regno unito": "GB",
-
         "fr": "FR",
         "france": "FR",
         "francia": "FR",
-
         "es": "ES",
         "spain": "ES",
         "spagna": "ES",
-
         "de": "DE",
         "germany": "DE",
         "germania": "DE",
-
         "jp": "JP",
         "japan": "JP",
         "giappone": "JP",
@@ -86,13 +88,13 @@ def normalize_category(segment):
 
     s = segment.lower()
 
-    if "music" in s:
+    if "music" in s or "concert" in s or "festival" in s:
         return "concert"
-    if "sports" in s:
+    if "sports" in s or "sport" in s:
         return "sport"
-    if "arts" in s or "theatre" in s or "theater" in s:
+    if "arts" in s or "theatre" in s or "theater" in s or "performing" in s:
         return "theatre"
-    if "film" in s:
+    if "film" in s or "community" in s or "expo" in s:
         return "culture"
 
     return "event"
@@ -161,6 +163,7 @@ def calculate_ai_score(event):
     title = clean_text(event.get("title"))
     venue = clean_text(event.get("venue"))
     category = clean_text(event.get("category"))
+    source_name = clean_text(event.get("source_name"))
 
     premium_words = [
         "final",
@@ -191,6 +194,7 @@ def calculate_ai_score(event):
         "san siro",
         "camp nou",
         "santiago bernabeu",
+        "auditorium parco della musica",
     ]
 
     for word in premium_words:
@@ -204,47 +208,15 @@ def calculate_ai_score(event):
     if category in ["sport", "concert", "theatre"]:
         score += 5
 
+    if source_name == "predicthq":
+        rank = event.get("rank")
+        try:
+            if rank:
+                score += min(int(rank) // 10, 15)
+        except Exception:
+            pass
+
     return min(score, 100)
-
-
-def get_predict_score(event):
-    if not PREDICT_API_KEY or not PREDICT_API_URL:
-        return calculate_ai_score(event)
-
-    payload = json.dumps({
-        "title": event.get("title"),
-        "category": event.get("category"),
-        "subcategory": event.get("subcategory"),
-        "city": event.get("city"),
-        "country": event.get("country"),
-        "venue": event.get("venue"),
-        "start_date": event.get("start_date"),
-        "price_min": event.get("price_min"),
-        "price_max": event.get("price_max"),
-        "currency": event.get("currency"),
-        "source_name": event.get("source_name"),
-    }).encode("utf-8")
-
-    request = Request(
-        PREDICT_API_URL,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {PREDICT_API_KEY}",
-            "User-Agent": "WELOVEIT-Events/1.0",
-        },
-        method="POST"
-    )
-
-    try:
-        with urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-
-        return int(data.get("score", calculate_ai_score(event)))
-
-    except Exception as exc:
-        print("Predict API error:", exc)
-        return calculate_ai_score(event)
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -368,9 +340,140 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        event["ai_score"] = get_predict_score(event)
+        event["ai_score"] = calculate_ai_score(event)
         events.append(event)
 
+    return events
+
+
+def get_predicthq_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not PREDICT_API_KEY:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+
+    params = {
+        "limit": size,
+        "sort": "start",
+        "state": "active",
+    }
+
+    if normalized_city:
+        params["q"] = normalized_city
+
+    if country_code:
+        params["country"] = country_code
+
+    if from_date:
+        params["start.gte"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        params["start.lte"] = f"{to_date}T23:59:59Z"
+
+    phq_category = PREDICTHQ_CATEGORY_MAP.get(category)
+    if phq_category:
+        params["category"] = phq_category
+
+    url = PREDICT_API_URL + "?" + urlencode(params)
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {PREDICT_API_KEY}",
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("PredictHQ error:", exc)
+        return []
+
+    raw_events = data.get("results", [])
+    events = []
+
+    for item in raw_events:
+        title = item.get("title", "Unknown event")
+        start = item.get("start", "")
+        start_date = start[:10] if start else ""
+        start_time = start[11:19] if len(start) >= 19 else None
+
+        if not start_date:
+            continue
+
+        if from_date and start_date < from_date:
+            continue
+
+        if to_date and start_date > to_date:
+            continue
+
+        phq_category = item.get("category", "")
+        mapped_category = normalize_category(phq_category)
+
+        if category and mapped_category != category:
+            continue
+
+        location = item.get("geo", {}).get("address", {})
+        city_name = location.get("locality") or normalized_city
+        country_name = location.get("country_code") or country_code
+
+        venue_name = ""
+        entities = item.get("entities", [])
+        if entities:
+            venue_name = entities[0].get("name", "")
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": phq_category or "Live event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "PredictHQ",
+            "source_url": item.get("url"),
+            "ticket_url": None,
+            "image_url": None,
+            "price_min": None,
+            "price_max": None,
+            "currency": None,
+            "is_vip_available": False,
+            "status": item.get("state", "active"),
+            "rank": item.get("rank"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
+    ticketmaster_events = get_ticketmaster_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        size=size
+    )
+
+    predicthq_events = get_predicthq_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        size=size
+    )
+
+    events = ticketmaster_events + predicthq_events
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
 
@@ -406,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster",
+                "provider": "Ticketmaster + PredictHQ",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT"
@@ -418,11 +521,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster",
+                "provider": "Ticketmaster + PredictHQ",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
-                "version": "ticketmaster-country-filtered-deduped-v3"
+                "version": "ticketmaster-predicthq-country-filtered-v4"
             })
             return
 
@@ -433,7 +536,7 @@ class Handler(BaseHTTPRequestHandler):
             to_date = query.get("to_date", [""])[0]
             category = query.get("category", [""])[0]
 
-            events = get_ticketmaster_events(
+            events = get_all_events(
                 city=city,
                 country=country,
                 from_date=from_date,
