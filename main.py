@@ -1,10 +1,9 @@
 import os
 import json
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
 
 PORT = int(os.environ.get("PORT", "8000"))
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
@@ -47,7 +46,6 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
     if to_date:
         params["endDateTime"] = f"{to_date}T23:59:59Z"
 
-    # filtro categoria Ticketmaster
     if category == "sport":
         params["classificationName"] = "sports"
     elif category == "concert":
@@ -58,7 +56,6 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
         params["classificationName"] = "arts"
 
     url = "https://app.ticketmaster.com/discovery/v2/events.json?" + urlencode(params)
-
     request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
 
     try:
@@ -76,18 +73,16 @@ def get_ticketmaster_events(city="", from_date="", to_date="", category="", size
         start_date = dates.get("localDate")
         start_time = dates.get("localTime")
 
-if not start_date:
-    continue
+        if not start_date:
+            continue
 
-if from_date and start_date < from_date:
-    continue
+        if from_date and start_date < from_date:
+            continue
 
-if to_date and start_date > to_date:
-    continue
-        venue_data = (
-            item.get("_embedded", {})
-            .get("venues", [{}])[0]
-        )
+        if to_date and start_date > to_date:
+            continue
+
+        venue_data = item.get("_embedded", {}).get("venues", [{}])[0]
 
         city_name = venue_data.get("city", {}).get("name", "")
         country_name = venue_data.get("country", {}).get("name", "")
@@ -161,8 +156,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"status": "ok"})
 
     def do_GET(self):
-        from urllib.parse import urlparse, parse_qs
-
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
 
