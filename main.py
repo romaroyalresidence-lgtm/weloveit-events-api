@@ -34,6 +34,11 @@ CITY_MAP = {
 }
 
 
+def normalize_city(city):
+    key = (city or "").strip().lower()
+    return CITY_MAP.get(key, city.strip())
+
+
 def normalize_country_code(country):
     key = (country or "").strip().lower()
 
@@ -69,6 +74,9 @@ def normalize_country_code(country):
         "giappone": "JP",
     }
 
+    if not key:
+        return ""
+
     return country_map.get(key, country.strip().upper())
 
 
@@ -99,6 +107,7 @@ def make_dedupe_key(event):
         clean_text(event.get("title")),
         clean_text(event.get("venue")),
         clean_text(event.get("city")),
+        clean_text(event.get("country")),
         clean_text(event.get("start_date")),
     ])
 
@@ -111,6 +120,7 @@ def dedupe_events(events):
         key = make_dedupe_key(event)
         if key in seen:
             continue
+
         seen.add(key)
         unique.append(event)
 
@@ -196,6 +206,7 @@ def calculate_ai_score(event):
 
     return min(score, 100)
 
+
 def get_predict_score(event):
     if not PREDICT_API_KEY or not PREDICT_API_URL:
         return calculate_ai_score(event)
@@ -235,6 +246,7 @@ def get_predict_score(event):
         print("Predict API error:", exc)
         return calculate_ai_score(event)
 
+
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
     if not TICKETMASTER_API_KEY:
         return []
@@ -250,10 +262,10 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
 
     if normalized_city:
         params["city"] = normalized_city
-        
+
     if country_code:
         params["countryCode"] = country_code
-    
+
     if from_date:
         params["startDateTime"] = f"{from_date}T00:00:00Z"
 
@@ -262,7 +274,6 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
 
     if category == "sport":
         params["classificationName"] = "sports"
-        
     elif category == "concert":
         params["classificationName"] = "music"
     elif category == "theatre":
@@ -305,6 +316,11 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
 
         if normalized_city and city_name:
             if clean_text(city_name) != clean_text(normalized_city):
+                continue
+
+        if country_code:
+            venue_country_code = venue_data.get("country", {}).get("countryCode", "")
+            if venue_country_code and clean_text(venue_country_code) != clean_text(country_code):
                 continue
 
         classifications = item.get("classifications", [])
@@ -384,40 +400,47 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"status": "ok"})
 
     def do_GET(self):
-    parsed = urlparse(self.path)
-    query = parse_qs(parsed.query)
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
 
-    if parsed.path == "/health":
-        self.send_json({
-            "status": "ok",
-            "service": "WELOVEIT Events API",
-            "provider": "Ticketmaster",
-            "api_key_present": bool(TICKETMASTER_API_KEY),
-            "version": "ticketmaster-filtered-deduped-v2"
-        })
-        return
+        if parsed.path == "/":
+            self.send_json({
+                "service": "WELOVEIT Events API",
+                "provider": "Ticketmaster",
+                "endpoints": {
+                    "health": "/health",
+                    "events": "/events?city=rome&country=IT"
+                }
+            })
+            return
 
-    if parsed.path == "/events":
-        city = query.get("city", query.get("destination", [""]))[0]
-        country = query.get("country", query.get("countryCode", [""]))[0]
-        from_date = query.get("from_date", [""])[0]
-        to_date = query.get("to_date", [""])[0]
-        category = query.get("category", [""])[0]
+        if parsed.path == "/health":
+            self.send_json({
+                "status": "ok",
+                "service": "WELOVEIT Events API",
+                "provider": "Ticketmaster",
+                "api_key_present": bool(TICKETMASTER_API_KEY),
+                "predict_api_key_present": bool(PREDICT_API_KEY),
+                "predict_api_url_present": bool(PREDICT_API_URL),
+                "version": "ticketmaster-country-filtered-deduped-v3"
+            })
+            return
 
-        events = get_ticketmaster_events(
-            city=city,
-            country=country,
-            from_date=from_date,
-            to_date=to_date,
-            category=category,
-            size=80
-        )
+        if parsed.path == "/events":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
 
-        self.send_json(events)
-        return
-
-    self.send_json({"error": "not found"}, status=404)
-    return
+            events = get_ticketmaster_events(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category,
+                size=80
+            )
 
             self.send_json(events)
             return
