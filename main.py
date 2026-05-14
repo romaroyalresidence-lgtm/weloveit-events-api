@@ -95,30 +95,14 @@ FOOTBALL_CITY_TEAMS = {
 
 
 FOOTBALL_CITY_LEAGUES = {
-    "london|gb": [
-        {"id": 39, "name": "Premier League"},
-    ],
-    "rome|it": [
-        {"id": 135, "name": "Serie A"},
-    ],
-    "milan|it": [
-        {"id": 135, "name": "Serie A"},
-    ],
-    "madrid|es": [
-        {"id": 140, "name": "La Liga"},
-    ],
-    "barcelona|es": [
-        {"id": 140, "name": "La Liga"},
-    ],
-    "paris|fr": [
-        {"id": 61, "name": "Ligue 1"},
-    ],
-    "munich|de": [
-        {"id": 78, "name": "Bundesliga"},
-    ],
-    "berlin|de": [
-        {"id": 78, "name": "Bundesliga"},
-    ],
+    "london|gb": [{"id": 39, "name": "Premier League"}],
+    "rome|it": [{"id": 135, "name": "Serie A"}],
+    "milan|it": [{"id": 135, "name": "Serie A"}],
+    "madrid|es": [{"id": 140, "name": "La Liga"}],
+    "barcelona|es": [{"id": 140, "name": "La Liga"}],
+    "paris|fr": [{"id": 61, "name": "Ligue 1"}],
+    "munich|de": [{"id": 78, "name": "Bundesliga"}],
+    "berlin|de": [{"id": 78, "name": "Bundesliga"}],
 }
 
 
@@ -139,6 +123,44 @@ CITY_ALIASES = {
     "berlin": ["berlin", "berlino"],
     "berlino": ["berlin", "berlino"],
 }
+
+
+ROME_FOOTBALL_TEAMS = [
+    "lazio",
+    "lazio rome",
+    "ss lazio",
+    "as roma",
+    "roma",
+    "rome",
+]
+
+
+ITALIAN_FOOTBALL_WORDS = [
+    "serie a",
+    "serie b",
+    "coppa italia",
+    "supercoppa",
+    "calcio",
+    "fc",
+    "bc",
+    "ac milan",
+    "inter",
+    "juventus",
+    "atalanta",
+    "sassuolo",
+    "torino",
+    "cagliari",
+    "bologna",
+    "fiorentina",
+    "napoli",
+    "verona",
+    "genoa",
+    "lecce",
+    "monza",
+    "udinese",
+    "empoli",
+    "parma",
+]
 
 
 def normalize_city(city):
@@ -446,12 +468,171 @@ def get_best_image(images):
     return sorted_images[0].get("url")
 
 
+def infer_sport_subcategory(title, city="", country=""):
+    title_clean = clean_text(title)
+    city_clean = clean_text(city)
+    country_code = clean_text(normalize_country_code(country))
+
+    if "wwe" in title_clean or "wrestling" in title_clean:
+        return "Wrestling"
+
+    if "marathon" in title_clean or "half marathon" in title_clean:
+        return "Marathon"
+
+    if "internazionali bnl" in title_clean or "tennis" in title_clean or "atp" in title_clean or "wta" in title_clean:
+        return "Tennis"
+
+    if "formula 1" in title_clean or "grand prix" in title_clean or "motogp" in title_clean:
+        return "Motorsport"
+
+    if "nba" in title_clean or "basketball" in title_clean or "basket" in title_clean:
+        return "Basketball"
+
+    if "rugby" in title_clean or "six nations" in title_clean:
+        return "Rugby"
+
+    if "serie a" in title_clean:
+        return "Serie A"
+
+    if country_code == "it" and any(word in title_clean for word in ITALIAN_FOOTBALL_WORDS):
+        return "Serie A"
+
+    if "premier league" in title_clean:
+        return "Premier League"
+
+    if "la liga" in title_clean:
+        return "La Liga"
+
+    if "bundesliga" in title_clean:
+        return "Bundesliga"
+
+    if "ligue 1" in title_clean:
+        return "Ligue 1"
+
+    if " vs " in title_clean or " v " in title_clean:
+        if city_clean in ["roma", "rome"] and any(team in title_clean for team in ROME_FOOTBALL_TEAMS):
+            return "Serie A"
+        return "Football"
+
+    return "Sport"
+
+
+def clean_sport_title(title):
+    if not title:
+        return title
+
+    value = title.strip()
+
+    replacements = {
+        "Lazio Rome": "Lazio",
+        "AS Roma Rome": "AS Roma",
+        "Roma Rome": "Roma",
+        "BC": "",
+        "Calcio": "",
+    }
+
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+
+    value = re.sub(r"\s+", " ", value).strip()
+    value = value.replace(" vs ", " vs ")
+
+    return value
+
+
+def infer_sport_venue(title, city="", venue=""):
+    title_clean = clean_text(title)
+    city_clean = clean_text(city)
+    venue_clean = clean_text(venue)
+
+    if city_clean in ["roma", "rome"]:
+        if any(team in title_clean for team in ROME_FOOTBALL_TEAMS):
+            return "Stadio Olimpico"
+
+        if "internazionali bnl" in title_clean or "tennis" in title_clean:
+            return "Foro Italico"
+
+        if "marathon" in title_clean:
+            return "Rome city center"
+
+        if "wwe" in title_clean:
+            if venue_clean and venue_clean not in ["lazio rome", "ss lazio", "as roma"]:
+                return venue
+            return "Rome"
+
+    if venue_clean in ["lazio rome", "ss lazio", "as roma", "roma", "rome"]:
+        return ""
+
+    return venue
+
+
+def build_ticket_search_url(event):
+    title = str(event.get("title") or "")
+    city = str(event.get("city") or "")
+    country = str(event.get("country") or "")
+    start_date = str(event.get("start_date") or "")
+    subcategory = str(event.get("subcategory") or "")
+
+    search_terms = [
+        title,
+        subcategory,
+        city,
+        country,
+        start_date,
+        "official tickets",
+    ]
+
+    query = " ".join([term for term in search_terms if term]).strip()
+
+    if not query:
+        return None
+
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
+def enhance_predicthq_event(event):
+    if clean_text(event.get("source_name")) != "predicthq":
+        return event
+
+    if event.get("category") != "sport":
+        return event
+
+    title = event.get("title") or ""
+    city = event.get("city") or ""
+    country = event.get("country") or ""
+    venue = event.get("venue") or ""
+
+    cleaned_title = clean_sport_title(title)
+    subcategory = infer_sport_subcategory(cleaned_title, city, country)
+    cleaned_venue = infer_sport_venue(cleaned_title, city, venue)
+
+    event["title"] = cleaned_title
+    event["subcategory"] = subcategory
+    event["venue"] = cleaned_venue or venue
+
+    if subcategory in ["Serie A", "Premier League", "La Liga", "Bundesliga", "Ligue 1", "Football"]:
+        event["sport_type"] = "Football"
+    elif subcategory == "Tennis":
+        event["sport_type"] = "Tennis"
+    elif subcategory == "Marathon":
+        event["sport_type"] = "Running"
+    elif subcategory == "Wrestling":
+        event["sport_type"] = "Wrestling"
+    else:
+        event["sport_type"] = "Sport"
+
+    event["ticket_url"] = build_ticket_search_url(event)
+
+    return event
+
+
 def calculate_ai_score(event):
     score = 70
 
     title = clean_text(event.get("title"))
     venue = clean_text(event.get("venue"))
     category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
     source_name = clean_text(event.get("source_name"))
 
     premium_words = [
@@ -489,6 +670,9 @@ def calculate_ai_score(event):
         "barcelona",
         "psg",
         "bayern",
+        "internazionali bnl",
+        "marathon",
+        "wwe",
     ]
 
     iconic_venues = [
@@ -510,6 +694,20 @@ def calculate_ai_score(event):
         "tottenham hotspur stadium",
         "parc des princes",
         "allianz arena",
+        "foro italico",
+    ]
+
+    premium_subcategories = [
+        "serie a",
+        "premier league",
+        "la liga",
+        "bundesliga",
+        "ligue 1",
+        "champions league",
+        "tennis",
+        "motorsport",
+        "wrestling",
+        "marathon",
     ]
 
     for word in premium_words:
@@ -519,6 +717,10 @@ def calculate_ai_score(event):
     for place in iconic_venues:
         if place in venue:
             score += 5
+
+    for item in premium_subcategories:
+        if item in subcategory:
+            score += 7
 
     if category in ["sport", "motorsport", "horse_racing", "concert", "theatre"]:
         score += 5
@@ -535,21 +737,6 @@ def calculate_ai_score(event):
             pass
 
     return min(score, 100)
-
-
-def build_ticket_search_url(event):
-    query = " ".join([
-        str(event.get("title") or ""),
-        str(event.get("city") or ""),
-        str(event.get("country") or ""),
-        str(event.get("start_date") or ""),
-        "tickets"
-    ]).strip()
-
-    if not query:
-        return None
-
-    return "https://www.google.com/search?" + urlencode({"q": query})
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -805,6 +992,7 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+        event = enhance_predicthq_event(event)
         event["ticket_url"] = build_ticket_search_url(event)
         event["ai_score"] = calculate_ai_score(event)
         events.append(event)
@@ -1313,7 +1501,7 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v9-debug-endpoint"
+                "version": "ticketmaster-predicthq-football-v10-sport-cleanup"
             })
             return
 
