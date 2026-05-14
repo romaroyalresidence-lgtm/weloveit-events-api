@@ -131,7 +131,6 @@ ROME_FOOTBALL_TEAMS = [
     "ss lazio",
     "as roma",
     "roma",
-    "rome",
 ]
 
 
@@ -160,6 +159,27 @@ ITALIAN_FOOTBALL_WORDS = [
     "udinese",
     "empoli",
     "parma",
+]
+
+
+BIG_MATCH_WORDS = [
+    "ac milan",
+    "inter",
+    "juventus",
+    "napoli",
+    "atalanta",
+    "roma",
+    "lazio",
+    "arsenal",
+    "chelsea",
+    "tottenham",
+    "liverpool",
+    "manchester",
+    "real madrid",
+    "barcelona",
+    "atletico",
+    "psg",
+    "bayern",
 ]
 
 
@@ -369,13 +389,13 @@ def event_quality_score(event):
     score = event.get("ai_score") or 0
 
     if event.get("ticket_url"):
-        score += 20
-
-    if event.get("image_url"):
         score += 10
 
+    if event.get("image_url"):
+        score += 7
+
     if event.get("venue"):
-        score += 5
+        score += 4
 
     source = clean_text(event.get("source_name"))
 
@@ -383,17 +403,10 @@ def event_quality_score(event):
         score += 8
 
     if source == "api-football":
-        score += 12
+        score += 7
 
     if source == "predicthq":
-        score += 3
-
-    rank = event.get("rank")
-    try:
-        if rank:
-            score += min(int(rank) // 10, 10)
-    except Exception:
-        pass
+        score += 2
 
     return score
 
@@ -527,15 +540,14 @@ def clean_sport_title(title):
         "Lazio Rome": "Lazio",
         "AS Roma Rome": "AS Roma",
         "Roma Rome": "Roma",
-        "BC": "",
-        "Calcio": "",
+        " BC": "",
+        " Calcio": "",
     }
 
     for old, new in replacements.items():
         value = value.replace(old, new)
 
     value = re.sub(r"\s+", " ", value).strip()
-    value = value.replace(" vs ", " vs ")
 
     return value
 
@@ -545,20 +557,24 @@ def infer_sport_venue(title, city="", venue=""):
     city_clean = clean_text(city)
     venue_clean = clean_text(venue)
 
+    # v11: prima controlliamo Marathon/Tennis, poi calcio.
+    # Così Rome Marathon non finisce più allo Stadio Olimpico.
+    if "marathon" in title_clean or "half marathon" in title_clean:
+        return "Rome city center" if city_clean in ["roma", "rome"] else (venue or "City center")
+
+    if "internazionali bnl" in title_clean or "tennis" in title_clean:
+        if city_clean in ["roma", "rome"]:
+            return "Foro Italico"
+        return venue or ""
+
+    if "wwe" in title_clean or "wrestling" in title_clean:
+        if venue_clean and venue_clean not in ["lazio rome", "ss lazio", "as roma"]:
+            return venue
+        return city or ""
+
     if city_clean in ["roma", "rome"]:
         if any(team in title_clean for team in ROME_FOOTBALL_TEAMS):
             return "Stadio Olimpico"
-
-        if "internazionali bnl" in title_clean or "tennis" in title_clean:
-            return "Foro Italico"
-
-        if "marathon" in title_clean:
-            return "Rome city center"
-
-        if "wwe" in title_clean:
-            if venue_clean and venue_clean not in ["lazio rome", "ss lazio", "as roma"]:
-                return venue
-            return "Rome"
 
     if venue_clean in ["lazio rome", "ss lazio", "as roma", "roma", "rome"]:
         return ""
@@ -627,7 +643,7 @@ def enhance_predicthq_event(event):
 
 
 def calculate_ai_score(event):
-    score = 70
+    score = 60
 
     title = clean_text(event.get("title"))
     venue = clean_text(event.get("venue"))
@@ -710,33 +726,56 @@ def calculate_ai_score(event):
         "marathon",
     ]
 
+    premium_word_bonus = 0
     for word in premium_words:
         if word in title:
-            score += 5
+            premium_word_bonus += 3
+    score += min(premium_word_bonus, 15)
 
+    venue_bonus = 0
     for place in iconic_venues:
         if place in venue:
-            score += 5
+            venue_bonus += 5
+    score += min(venue_bonus, 8)
 
     for item in premium_subcategories:
         if item in subcategory:
-            score += 7
+            score += 8
+            break
 
     if category in ["sport", "motorsport", "horse_racing", "concert", "theatre"]:
+        score += 4
+
+    if source_name == "ticketmaster":
         score += 5
 
     if source_name == "api-football":
-        score += 15
+        score += 7
 
     if source_name == "predicthq":
         rank = event.get("rank")
         try:
             if rank:
-                score += min(int(rank) // 10, 15)
+                score += min(int(rank) // 15, 7)
         except Exception:
             pass
 
-    return min(score, 100)
+    if any(word in title for word in BIG_MATCH_WORDS):
+        score += 4
+
+    if "ac milan" in title or "inter" in title or "juventus" in title or "napoli" in title:
+        score += 4
+
+    if "internazionali bnl" in title:
+        score += 5
+
+    if "marathon" in title:
+        score += 3
+
+    if "final" in title or "derby" in title:
+        score += 6
+
+    return min(score, 98)
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -1501,7 +1540,7 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v10-sport-cleanup"
+                "version": "ticketmaster-predicthq-football-v11-score-venue-fix"
             })
             return
 
