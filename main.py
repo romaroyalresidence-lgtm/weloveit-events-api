@@ -805,9 +805,7 @@ def calculate_ai_score(event):
         score += 6
 
     return min(score, 98)
-
-
-def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
+    def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
     if not TICKETMASTER_API_KEY:
         return []
 
@@ -862,12 +860,6 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         if not start_date:
             continue
 
-        if from_date and start_date < from_date:
-            continue
-
-        if to_date and start_date > to_date:
-            continue
-
         venue_data = item.get("_embedded", {}).get("venues", [{}])[0]
 
         city_name = venue_data.get("city", {}).get("name", "")
@@ -896,19 +888,7 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         mapped_category = normalize_category(" ".join([segment, genre, subgenre]))
 
         if category and mapped_category != category:
-            if category in ["motorsport", "horse_racing"] and mapped_category == "sport":
-                title_check = clean_text(item.get("name", ""))
-                genre_check = clean_text(" ".join([segment, genre, subgenre]))
-
-                if category == "motorsport":
-                    if not any(word in title_check or word in genre_check for word in ["motor", "racing", "formula", "grand prix"]):
-                        continue
-
-                if category == "horse_racing":
-                    if not any(word in title_check or word in genre_check for word in ["horse", "equestrian", "racing"]):
-                        continue
-            else:
-                continue
+            continue
 
         price_min = None
         price_max = None
@@ -1007,24 +987,12 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
         if not start_date:
             continue
 
-        if from_date and start_date < from_date:
-            continue
-
-        if to_date and start_date > to_date:
-            continue
-
         phq_category = item.get("category", "")
         mapped_category = normalize_category(phq_category)
 
         if category and mapped_category != category:
-            if category in ["motorsport", "horse_racing"] and mapped_category == "sport":
-                title_check = clean_text(title)
-                if category == "motorsport":
-                    if not any(word in title_check for word in ["motor", "racing", "formula", "grand prix"]):
-                        continue
-                if category == "horse_racing":
-                    if not any(word in title_check for word in ["horse", "equestrian", "racing"]):
-                        continue
+            if category == "culture" and mapped_category in ["culture", "theatre", "concert"]:
+                pass
             else:
                 continue
 
@@ -1081,6 +1049,139 @@ def map_eventbrite_category(category_name="", subcategory_name=""):
         return "theatre"
 
     return "culture"
+
+
+def debug_eventbrite_request(params):
+    if not EVENTBRITE_API_KEY:
+        return {
+            "ok": False,
+            "error": "missing EVENTBRITE_API_KEY",
+            "request_url": None,
+            "params": params,
+        }
+
+    url = EVENTBRITE_API_BASE_URL.rstrip("/") + "/events/search/?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {EVENTBRITE_API_KEY}",
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        events = data.get("events", [])
+        sample = []
+
+        for item in events[:5]:
+            venue = item.get("venue") or {}
+            address = venue.get("address") or {}
+            start = item.get("start") or {}
+            category_data = item.get("category") or {}
+            subcategory_data = item.get("subcategory") or {}
+
+            sample.append({
+                "id": item.get("id"),
+                "title": item.get("name", {}).get("text"),
+                "url": item.get("url"),
+                "start_local": start.get("local"),
+                "start_utc": start.get("utc"),
+                "status": item.get("status"),
+                "is_free": item.get("is_free"),
+                "venue_name": venue.get("name"),
+                "venue_city": address.get("city"),
+                "venue_country": address.get("country"),
+                "category": category_data.get("name"),
+                "subcategory": subcategory_data.get("name"),
+            })
+
+        return {
+            "ok": True,
+            "status_code": status_code,
+            "request_url": url,
+            "params": params,
+            "events_count": len(events),
+            "pagination": data.get("pagination"),
+            "sample": sample,
+            "raw_error": data.get("error"),
+            "raw_status_code": data.get("status_code"),
+            "raw_description": data.get("error_description"),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "request_url": url,
+            "params": params,
+        }
+
+
+def build_debug_eventbrite_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+
+    location_address = normalized_city
+    if country_code:
+        location_address = f"{normalized_city}, {country_code}"
+
+    base_params = {
+        "location.address": location_address,
+        "location.within": "50km",
+        "expand": "venue,logo,category,subcategory",
+        "sort_by": "date",
+        "page_size": 10,
+    }
+
+    if from_date:
+        base_params["start_date.range_start"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        base_params["start_date.range_end"] = f"{to_date}T23:59:59Z"
+
+    eventbrite_category_id = EVENTBRITE_CATEGORY_MAP.get(category)
+    if eventbrite_category_id:
+        base_params["categories"] = eventbrite_category_id
+
+    if category == "culture":
+        base_params["q"] = "business food nightlife workshop festival community"
+
+    simple_params = {
+        "location.address": location_address,
+        "location.within": "50km",
+        "page_size": 10,
+    }
+
+    if from_date:
+        simple_params["start_date.range_start"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        simple_params["start_date.range_end"] = f"{to_date}T23:59:59Z"
+
+    return {
+        "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
+        "base_url": EVENTBRITE_API_BASE_URL,
+        "input": {
+            "city": city,
+            "country": country,
+            "from_date": from_date,
+            "to_date": to_date,
+            "category": category,
+        },
+        "normalized": {
+            "city": normalized_city,
+            "country_code": country_code,
+            "location_address": location_address,
+        },
+        "full_search": debug_eventbrite_request(base_params),
+        "simple_search": debug_eventbrite_request(simple_params),
+    }
 
 
 def get_eventbrite_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -1147,12 +1248,6 @@ def get_eventbrite_events(city="", country="", from_date="", to_date="", categor
         if not start_date:
             continue
 
-        if from_date and start_date < from_date:
-            continue
-
-        if to_date and start_date > to_date:
-            continue
-
         venue_data = item.get("venue") or {}
         city_name = venue_data.get("address", {}).get("city") or normalized_city
         country_name = venue_data.get("address", {}).get("country") or country_code
@@ -1161,11 +1256,6 @@ def get_eventbrite_events(city="", country="", from_date="", to_date="", categor
         if city and city_name:
             if not event_matches_requested_city({"city": city_name}, city):
                 continue
-
-        if country_code and country_name:
-            if clean_text(country_name) not in [clean_text(country_code), clean_text(country)]:
-                if len(country_name) == 2 and clean_text(country_name) != clean_text(country_code):
-                    continue
 
         category_name = (item.get("category") or {}).get("name") or ""
         subcategory_name = (item.get("subcategory") or {}).get("name") or ""
@@ -1182,7 +1272,6 @@ def get_eventbrite_events(city="", country="", from_date="", to_date="", categor
 
         is_free = item.get("is_free")
         price_min = 0 if is_free is True else None
-        currency = None
 
         event = {
             "title": title,
@@ -1199,7 +1288,7 @@ def get_eventbrite_events(city="", country="", from_date="", to_date="", categor
             "image_url": image_url,
             "price_min": price_min,
             "price_max": None,
-            "currency": currency,
+            "currency": None,
             "is_vip_available": False,
             "status": item.get("status", "active"),
             "is_free": is_free,
@@ -1215,17 +1304,8 @@ def get_eventbrite_events(city="", country="", from_date="", to_date="", categor
 
 def get_default_football_dates(from_date="", to_date=""):
     today = datetime.now(timezone.utc).date()
-
-    if from_date:
-        start = from_date
-    else:
-        start = today.isoformat()
-
-    if to_date:
-        end = to_date
-    else:
-        end = (today + timedelta(days=180)).isoformat()
-
+    start = from_date or today.isoformat()
+    end = to_date or (today + timedelta(days=180)).isoformat()
     return start, end
 
 
@@ -1233,18 +1313,10 @@ def get_football_season(date_string=""):
     try:
         year = int((date_string or "")[:4])
         month = int((date_string or "")[5:7])
-
-        if month >= 8:
-            return year
-
-        return year - 1
+        return year if month >= 8 else year - 1
     except Exception:
         today = datetime.now(timezone.utc).date()
-
-        if today.month >= 8:
-            return today.year
-
-        return today.year - 1
+        return today.year if today.month >= 8 else today.year - 1
 
 
 def get_football_city_key(city="", country=""):
@@ -1264,8 +1336,6 @@ def call_api_football(path, params):
 
     url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
 
-    print("API-Football request:", url)
-
     request = Request(
         url,
         headers={
@@ -1278,16 +1348,7 @@ def call_api_football(path, params):
     try:
         with urlopen(request, timeout=20) as response:
             data = json.loads(response.read().decode("utf-8"))
-
-        errors = data.get("errors")
-        if errors:
-            print("API-Football errors:", errors)
-
-        response_items = data.get("response", [])
-        print("API-Football results:", len(response_items))
-
         return data
-
     except Exception as exc:
         print("API-Football error:", exc)
         return None
@@ -1427,10 +1488,6 @@ def get_api_football_events_by_league(city="", country="", from_date="", to_date
     city_key = get_football_city_key(city, country)
 
     leagues = FOOTBALL_CITY_LEAGUES.get(city_key, [])
-    if not leagues:
-        print("API-Football debug: no leagues mapped for", city_key)
-        return []
-
     football_from, football_to = get_default_football_dates(from_date, to_date)
     football_season = get_football_season(football_from)
 
@@ -1449,20 +1506,13 @@ def get_api_football_events_by_league(city="", country="", from_date="", to_date
         if not data:
             continue
 
-        raw_fixtures = data.get("response", [])
-
-        for item in raw_fixtures:
+        for item in data.get("response", []):
             fixture_id = item.get("fixture", {}).get("id")
 
             if fixture_id and fixture_id in seen_fixture_ids:
                 continue
 
-            event = football_fixture_to_event(
-                item=item,
-                normalized_city=normalized_city,
-                country_code=country_code,
-                requested_city=city
-            )
+            event = football_fixture_to_event(item, normalized_city, country_code, city)
 
             if not event:
                 continue
@@ -1483,19 +1533,13 @@ def get_api_football_events_by_team(city="", country="", from_date="", to_date="
     city_key = get_football_city_key(city, country)
 
     teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
-    if not teams:
-        print("API-Football debug: no teams mapped for", city_key)
-        return []
-
     football_from, football_to = get_default_football_dates(from_date, to_date)
     football_season = get_football_season(football_from)
 
     events = []
     seen_fixture_ids = set()
 
-    teams = teams[:8]
-
-    for team in teams:
+    for team in teams[:8]:
         params = {
             "team": team["id"],
             "season": football_season,
@@ -1507,20 +1551,13 @@ def get_api_football_events_by_team(city="", country="", from_date="", to_date="
         if not data:
             continue
 
-        raw_fixtures = data.get("response", [])
-
-        for item in raw_fixtures:
+        for item in data.get("response", []):
             fixture_id = item.get("fixture", {}).get("id")
 
             if fixture_id and fixture_id in seen_fixture_ids:
                 continue
 
-            event = football_fixture_to_event(
-                item=item,
-                normalized_city=normalized_city,
-                country_code=country_code,
-                requested_city=city
-            )
+            event = football_fixture_to_event(item, normalized_city, country_code, city)
 
             if not event:
                 continue
@@ -1545,26 +1582,12 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
     if category and category != "sport":
         return []
 
-    league_events = get_api_football_events_by_league(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        size=size
+    events = (
+        get_api_football_events_by_league(city, country, from_date, to_date, size)
+        + get_api_football_events_by_team(city, country, from_date, to_date, size)
     )
 
-    team_events = get_api_football_events_by_team(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        size=size
-    )
-
-    events = league_events + team_events
-    events = dedupe_events(events)
-
-    return events[:size]
+    return dedupe_events(events)[:size]
 
 
 def build_debug_football_payload(city="", country="", from_date="", to_date=""):
@@ -1587,7 +1610,6 @@ def build_debug_football_payload(city="", country="", from_date="", to_date=""):
             "from": football_from,
             "to": football_to,
         }
-
         result = debug_api_football_request("/fixtures", params)
         result["league_config"] = league
         league_requests.append(result)
@@ -1599,7 +1621,6 @@ def build_debug_football_payload(city="", country="", from_date="", to_date=""):
             "from": football_from,
             "to": football_to,
         }
-
         result = debug_api_football_request("/fixtures", params)
         result["team_config"] = team
         team_requests.append(result)
@@ -1629,43 +1650,13 @@ def build_debug_football_payload(city="", country="", from_date="", to_date=""):
 
 
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
-    ticketmaster_events = get_ticketmaster_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category,
-        size=size
-    )
+    events = []
 
-    predicthq_events = get_predicthq_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category,
-        size=size
-    )
+    events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
+    events += get_predicthq_events(city, country, from_date, to_date, category, size)
+    events += get_api_football_events(city, country, from_date, to_date, category, size)
+    events += get_eventbrite_events(city, country, from_date, to_date, category, size)
 
-    football_events = get_api_football_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category,
-        size=size
-    )
-
-    eventbrite_events = get_eventbrite_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category,
-        size=size
-    )
-
-    events = ticketmaster_events + predicthq_events + football_events + eventbrite_events
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
     events = [event for event in events if event_matches_requested_city(event, city)]
@@ -1707,6 +1698,7 @@ class Handler(BaseHTTPRequestHandler):
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
                     "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
+                    "debug_eventbrite": "/debug-eventbrite?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "eventbrite_test": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
                     "sport_rome": "/events?city=rome&country=IT&category=sport",
@@ -1725,7 +1717,7 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
                 "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
-                "version": "ticketmaster-predicthq-football-eventbrite-v12"
+                "version": "ticketmaster-predicthq-football-eventbrite-v13-debug-eventbrite"
             })
             return
 
@@ -1740,6 +1732,24 @@ class Handler(BaseHTTPRequestHandler):
                 country=country,
                 from_date=from_date,
                 to_date=to_date
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-eventbrite":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            payload = build_debug_eventbrite_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
             )
 
             self.send_json(payload)
