@@ -228,6 +228,10 @@ BIG_MATCH_WORDS = [
 RECURRING_LOW_PRIORITY_TITLES = [
     "the great opera arias concert",
     "opera arias concert",
+    "stacey kent",
+    "mononeon",
+    "vince giordano and the nighthawks",
+    "live weekly",
 ]
 
 
@@ -468,6 +472,18 @@ def normalize_event_title(title):
     return title
 
 
+def title_core_for_dedupe(title):
+    value = normalize_event_title(title)
+
+    for sep in [" with ", " w ", " at ", " tour ", " live ", " presents "]:
+        if sep in value:
+            value = value.split(sep)[0].strip()
+
+    # Mantieni le prime parole significative: utile per "Don Toliver..." vs "Don Toliver: Octane Tour".
+    words = [w for w in value.split() if len(w) > 1]
+    return " ".join(words[:3]).strip()
+
+
 def similar_text(a, b):
     a = normalize_event_title(a)
     b = normalize_event_title(b)
@@ -480,6 +496,17 @@ def similar_text(a, b):
 
     if a in b or b in a:
         return True
+
+    core_a = title_core_for_dedupe(a)
+    core_b = title_core_for_dedupe(b)
+
+    if core_a and core_b:
+        if core_a == core_b:
+            return True
+        if len(core_a) >= 6 and (core_a in b or core_a in core_b):
+            return True
+        if len(core_b) >= 6 and (core_b in a or core_b in core_a):
+            return True
 
     ratio = SequenceMatcher(None, a, b).ratio()
     return ratio >= 0.84
@@ -600,28 +627,99 @@ def calculate_quality_adjustment(event):
 
 
 def apply_quality_ranking(event):
-    base_score = event.get("ai_score") or calculate_ai_score(event)
-    adjusted = base_score + calculate_quality_adjustment(event)
-
+    """
+    v17: scoring meno saturo.
+    Prima v15/v16 portava troppi eventi a 99/100. Qui separiamo segnali forti,
+    sorgente, venue, ticket/image e penalità per eventi generici/ricorrenti.
+    """
+    title = clean_text(event.get("title"))
+    venue = clean_text(event.get("venue"))
     category = clean_text(event.get("category"))
     subcategory = clean_text(event.get("subcategory"))
+    source = clean_text(event.get("source_name"))
 
+    score = 55
+
+    # Sorgente: preferiamo fonti ticketabili reali.
+    if source == "ticketmaster":
+        score += 12
+    elif source == "seatgeek":
+        score += 13
+    elif source == "api-football":
+        score += 11
+    elif source == "predicthq":
+        score += 4
+
+    # Prove concrete di acquistabilità/qualità.
+    if event.get("ticket_url"):
+        score += 7
+    if event.get("image_url"):
+        score += 5
+    if event.get("price_min") is not None:
+        score += 3
+    if venue:
+        score += 4
+
+    # Categoria.
     if category == "sport":
-        adjusted += 6
+        score += 9
+    elif category == "concert":
+        score += 8
+    elif category == "theatre":
+        score += 7
+    elif category == "culture":
+        score += 1
 
-    if category == "concert":
-        adjusted += 8
+    # Segnali premium.
+    if any(word in title for word in ["festival", "grand prix", "final", "derby", "world cup", "champions league"]):
+        score += 10
 
-    if category == "theatre":
-        adjusted += 6
+    if any(word in title for word in ["serie a", "premier league", "la liga", "nba", "nfl", "ufc", "wwe"]):
+        score += 8
 
-    if subcategory in ["serie a", "premier league", "la liga", "bundesliga", "ligue 1", "tennis", "marathon"]:
-        adjusted += 8
+    if any(word in venue for word in PREMIUM_VENUE_WORDS):
+        score += 10
 
-    adjusted = max(35, min(99, int(adjusted)))
+    if any(word in title for word in BIG_MATCH_WORDS):
+        score += 5
 
-    event["ai_score"] = adjusted
-    event["quality_score"] = adjusted
+    # Rank PredictHQ, ma senza farlo dominare.
+    try:
+        rank = int(event.get("rank") or 0)
+        if rank:
+            score += min(rank // 20, 5)
+    except Exception:
+        pass
+
+    # Penalità qualità.
+    if is_low_quality_conference(event):
+        score -= 28
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        score -= 14
+
+    if not venue:
+        score -= 5
+
+    # PredictHQ spesso mette performer come venue: abbassiamo.
+    if source == "predicthq" and venue and normalize_event_title(venue) == normalize_event_title(title):
+        score -= 9
+
+    # Eventi troppo lunghi/generici.
+    if len(title) > 90:
+        score -= 5
+
+    if any(word in title for word in ["student innovation showcase", "weekly", "fundraiser", "conference", "seminar", "round table"]):
+        score -= 8
+
+    # Repliche note.
+    if any(word in normalize_event_title(title) for word in RECURRING_LOW_PRIORITY_TITLES):
+        score -= 6
+
+    score = max(35, min(99, int(score)))
+
+    event["ai_score"] = score
+    event["quality_score"] = score
     event["is_low_quality_conference"] = is_low_quality_conference(event)
 
     return event
@@ -759,12 +857,13 @@ def limit_recurring_events(events, max_per_title_venue=2):
 
         is_recurring_candidate = (
             category in ["culture", "theatre", "concert"]
-            and source in ["predicthq", "ticketmaster"]
+            and source in ["predicthq", "ticketmaster", "seatgeek"]
             and (
                 any(t in title_key for t in RECURRING_LOW_PRIORITY_TITLES)
                 or "day two" in clean_text(event.get("title"))
                 or "day three" in clean_text(event.get("title"))
                 or "spring pass" in clean_text(event.get("title"))
+                or "weekly" in title_key
             )
         )
 
@@ -1178,6 +1277,13 @@ def parse_seatgeek_datetime(value):
     return start_date, start_time
 
 
+def read_http_error_body(exc):
+    try:
+        return exc.read().decode("utf-8")
+    except Exception:
+        return ""
+
+
 def get_seatgeek_events(city="", country="", from_date="", to_date="", category="", size=80):
     if not SEATGEEK_CLIENT_ID:
         return []
@@ -1192,10 +1298,8 @@ def get_seatgeek_events(city="", country="", from_date="", to_date="", category=
         "sort": "datetime_local.asc",
     }
 
-    # Secret è opzionale per molte chiamate SeatGeek, ma se disponibile lo inviamo.
-    if SEATGEEK_CLIENT_SECRET:
-        params["client_secret"] = SEATGEEK_CLIENT_SECRET
-
+    # v17: SeatGeek public events endpoint usa client_id. Non inviamo il secret nella query.
+    # Alcuni account ricevono 403 se il secret viene passato come parametro.
     if geo:
         params["lat"] = geo.split(",")[0]
         params["lon"] = geo.split(",")[1]
@@ -1219,6 +1323,9 @@ def get_seatgeek_events(city="", country="", from_date="", to_date="", category=
     try:
         with urlopen(request, timeout=20) as response:
             data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        print("SeatGeek HTTP error:", exc.code, read_http_error_body(exc))
+        return []
     except Exception as exc:
         print("SeatGeek error:", exc)
         return []
@@ -1329,9 +1436,7 @@ def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", 
     real_params = dict(params)
     if SEATGEEK_CLIENT_ID:
         real_params["client_id"] = SEATGEEK_CLIENT_ID
-    if SEATGEEK_CLIENT_SECRET:
-        real_params["client_secret"] = SEATGEEK_CLIENT_SECRET
-
+    # v17: debug con client_id only. Il secret resta su Render ma non viene inviato.
     url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(real_params)
 
     if not SEATGEEK_CLIENT_ID:
@@ -1382,11 +1487,27 @@ def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", 
             "sample": sample,
         }
 
+    except HTTPError as exc:
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "seatgeek_auth_mode": "client_id_only",
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "status_code": exc.code,
+            "error": str(exc),
+            "error_body": read_http_error_body(exc),
+            "request_url": safe_url,
+        }
     except Exception as exc:
         safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
         return {
             "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
             "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "seatgeek_auth_mode": "client_id_only",
             "base_url": SEATGEEK_API_BASE_URL,
             "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
             "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
@@ -2093,7 +2214,8 @@ class Handler(BaseHTTPRequestHandler):
                 "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
                 "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
                 "eventbrite_mode": "fallback_only",
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v16"
+                "seatgeek_auth_mode": "client_id_only",
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v17-seatgeek-debug-score-fix"
             })
             return
 
