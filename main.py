@@ -892,6 +892,73 @@ def call_api_football(path, params):
         return None
 
 
+def debug_api_football_request(path, params):
+    if not FOOTBALL_API_KEY:
+        return {
+            "ok": False,
+            "error": "missing FOOTBALL_API_KEY",
+            "request_url": None,
+            "params": params,
+        }
+
+    url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "x-apisports-key": FOOTBALL_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        results = data.get("response", [])
+        sample = []
+
+        for item in results[:5]:
+            fixture = item.get("fixture", {})
+            league = item.get("league", {})
+            teams = item.get("teams", {})
+            venue = fixture.get("venue", {})
+
+            sample.append({
+                "fixture_id": fixture.get("id"),
+                "date": fixture.get("date"),
+                "league": league.get("name"),
+                "league_id": league.get("id"),
+                "season": league.get("season"),
+                "home": teams.get("home", {}).get("name"),
+                "away": teams.get("away", {}).get("name"),
+                "venue_name": venue.get("name"),
+                "venue_city": venue.get("city"),
+                "status": fixture.get("status", {}).get("long"),
+            })
+
+        return {
+            "ok": True,
+            "status_code": status_code,
+            "request_url": url.replace(FOOTBALL_API_KEY or "", "***"),
+            "params": params,
+            "errors": data.get("errors"),
+            "results_count": len(results),
+            "sample": sample,
+            "paging": data.get("paging"),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "request_url": url.replace(FOOTBALL_API_KEY or "", "***"),
+            "params": params,
+        }
+
+
 def football_fixture_to_event(item, normalized_city, country_code, requested_city=""):
     fixture = item.get("fixture", {})
     fixture_id = fixture.get("id")
@@ -1099,6 +1166,67 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
     return events[:size]
 
 
+def build_debug_football_payload(city="", country="", from_date="", to_date=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
+
+    leagues = FOOTBALL_CITY_LEAGUES.get(city_key, [])
+    teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
+
+    league_requests = []
+    team_requests = []
+
+    for league in leagues:
+        params = {
+            "league": league["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+
+        result = debug_api_football_request("/fixtures", params)
+        result["league_config"] = league
+        league_requests.append(result)
+
+    for team in teams[:8]:
+        params = {
+            "team": team["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+
+        result = debug_api_football_request("/fixtures", params)
+        result["team_config"] = team
+        team_requests.append(result)
+
+    return {
+        "football_api_key_present": bool(FOOTBALL_API_KEY),
+        "base_url": FOOTBALL_API_BASE_URL,
+        "input": {
+            "city": city,
+            "country": country,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+        "normalized": {
+            "city": normalized_city,
+            "country_code": country_code,
+            "city_key": city_key,
+            "football_from": football_from,
+            "football_to": football_to,
+            "football_season": football_season,
+        },
+        "mapped_leagues": leagues,
+        "mapped_teams": teams,
+        "league_requests": league_requests,
+        "team_requests": team_requests,
+    }
+
+
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
     ticketmaster_events = get_ticketmaster_events(
         city=city,
@@ -1168,6 +1296,7 @@ class Handler(BaseHTTPRequestHandler):
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
+                    "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
                     "sport_rome": "/events?city=rome&country=IT&category=sport",
                     "concert": "/events?city=new%20york&country=US&category=concert"
@@ -1184,8 +1313,24 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v8-city-filter-debug"
+                "version": "ticketmaster-predicthq-football-v9-debug-endpoint"
             })
+            return
+
+        if parsed.path == "/debug-football":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+
+            payload = build_debug_football_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date
+            )
+
+            self.send_json(payload)
             return
 
         if parsed.path == "/events":
