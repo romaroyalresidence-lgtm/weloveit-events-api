@@ -865,7 +865,7 @@ def apply_quality_ranking(event):
     elif source == "api-football":
         score += 11
     elif source == "serpapi":
-        score += 6
+        score += 8
     elif source == "predicthq":
         score += 4
 
@@ -888,6 +888,9 @@ def apply_quality_ranking(event):
         score += 7
     elif category == "culture":
         score += 1
+
+    if source == "serpapi" and category in ["concert", "sport", "theatre"]:
+        score += 5
 
     # Segnali premium.
     if any(word in title for word in ["festival", "grand prix", "final", "derby", "world cup", "champions league"]):
@@ -1912,23 +1915,75 @@ def get_serpapi_event_link(item):
     return None
 
 
-def infer_serpapi_category(title="", description="", category=""):
+def infer_serpapi_category(title="", description="", category="", venue=""):
     if category:
         return category
 
-    text = clean_text(f"{title} {description}")
+    text = clean_text(f"{title} {description} {venue}")
 
-    if any(word in text for word in ["concert", "music", "festival", "dj", "live music", "band"]):
+    concert_words = [
+        "concert", "music", "festival", "dj", "live music", "band", "tour",
+        "billboard live", "spotify", "j-pop", "k-pop", "rock", "jazz",
+        "orchestra", "singer", "album", "live tour"
+    ]
+
+    sport_words = [
+        "football", "soccer", "basketball", "baseball", "rugby", "tennis",
+        "match", "game", "sumo", "tournament", "j.league", "npb", "b.league",
+        "marathon", "race", "grand prix"
+    ]
+
+    theatre_words = [
+        "theatre", "theater", "musical", "opera", "show", "performing arts",
+        "ballet", "stage"
+    ]
+
+    if any(word in text for word in concert_words):
         return "concert"
 
-    if any(word in text for word in ["football", "soccer", "basketball", "baseball", "rugby", "tennis", "match", "game"]):
+    if any(word in text for word in sport_words):
         return "sport"
 
-    if any(word in text for word in ["theatre", "theater", "musical", "opera", "show", "performing arts"]):
+    if any(word in text for word in theatre_words):
         return "theatre"
 
     return "culture"
 
+
+def infer_serpapi_subcategory(title="", description="", category="", venue=""):
+    text = clean_text(f"{title} {description} {venue}")
+    mapped_category = infer_serpapi_category(title, description, category, venue)
+
+    if mapped_category == "concert":
+        if "j-pop" in text or "jpop" in text or "kaientai" in text or "may j" in text:
+            return "J-Pop"
+        if "k-pop" in text or "kpop" in text:
+            return "K-Pop"
+        if "jazz" in text:
+            return "Jazz"
+        if "festival" in text:
+            return "Festival"
+        return "Concert"
+
+    if mapped_category == "sport":
+        if "sumo" in text:
+            return "Sumo"
+        if "baseball" in text or "npb" in text:
+            return "Baseball"
+        if "football" in text or "soccer" in text or "j.league" in text:
+            return "Football"
+        if "tennis" in text:
+            return "Tennis"
+        return "Sport"
+
+    if mapped_category == "theatre":
+        if "musical" in text:
+            return "Musical"
+        if "opera" in text:
+            return "Opera"
+        return "Theatre"
+
+    return "Culture"
 
 def call_serpapi_google_events(query_text, country_code=""):
     params = {
@@ -2010,8 +2065,8 @@ def get_serpapi_events(city="", country="", from_date="", to_date="", category="
             if not venue:
                 venue = address_parts[0] if address_parts else ""
 
-            mapped_category = infer_serpapi_category(title, description, category)
-            subcategory = item.get("event_type") or item.get("type") or mapped_category or "event"
+            mapped_category = infer_serpapi_category(title, description, category, venue or address_text)
+            subcategory = infer_serpapi_subcategory(title, description, category, venue or address_text)
 
             event = {
                 "title": title,
@@ -2895,11 +2950,12 @@ class Handler(BaseHTTPRequestHandler):
                 "japan_local_fallback": True,
                 "serpapi_location_filter": True,
                 "advanced_source_priority": True,
+                "serpapi_category_cleanup": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v21-location-merge"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v22-category-cleanup"
             })
             return
 
