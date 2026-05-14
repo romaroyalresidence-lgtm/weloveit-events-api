@@ -40,6 +40,9 @@ CITY_MAP = {
     "new york": "New York",
     "ny": "New York",
     "tokyo": "Tokyo",
+    "osaka": "Osaka",
+    "kyoto": "Kyoto",
+    "yokohama": "Yokohama",
     "madrid": "Madrid",
     "barcellona": "Barcelona",
     "barcelona": "Barcelona",
@@ -47,6 +50,18 @@ CITY_MAP = {
     "berlin": "Berlin",
     "monaco": "Munich",
     "munich": "Munich",
+    "toronto": "Toronto",
+    "vancouver": "Vancouver",
+    "montreal": "Montreal",
+    "montréal": "Montreal",
+    "sao paulo": "São Paulo",
+    "san paolo": "São Paulo",
+    "rio": "Rio de Janeiro",
+    "rio de janeiro": "Rio de Janeiro",
+    "buenos aires": "Buenos Aires",
+    "shanghai": "Shanghai",
+    "pechino": "Beijing",
+    "beijing": "Beijing",
 }
 
 
@@ -60,6 +75,51 @@ COUNTRY_NAME_MAP = {
     "JP": "japan",
     "BR": "brazil",
     "AR": "argentina",
+    "CA": "canada",
+    "CN": "china",
+}
+
+
+DEFAULT_COUNTRY_CITY = {
+    "IT": "Rome",
+    "US": "New York",
+    "GB": "London",
+    "FR": "Paris",
+    "ES": "Madrid",
+    "DE": "Berlin",
+    "JP": "Tokyo",
+    "BR": "São Paulo",
+    "AR": "Buenos Aires",
+    "CA": "Toronto",
+    "CN": "Shanghai",
+}
+
+COUNTRY_ONLY_ALIASES = {
+    "italia": "IT",
+    "italy": "IT",
+    "stati uniti": "US",
+    "usa": "US",
+    "us": "US",
+    "united states": "US",
+    "united states of america": "US",
+    "regno unito": "GB",
+    "uk": "GB",
+    "gb": "GB",
+    "united kingdom": "GB",
+    "francia": "FR",
+    "france": "FR",
+    "spagna": "ES",
+    "spain": "ES",
+    "germania": "DE",
+    "germany": "DE",
+    "giappone": "JP",
+    "japan": "JP",
+    "brasile": "BR",
+    "brazil": "BR",
+    "argentina": "AR",
+    "canada": "CA",
+    "cina": "CN",
+    "china": "CN",
 }
 
 
@@ -89,6 +149,16 @@ SEATGEEK_CITY_GEO = {
     "berlin|de": "52.5200,13.4050",
     "munich|de": "48.1351,11.5820",
     "tokyo|jp": "35.6762,139.6503",
+    "osaka|jp": "34.6937,135.5023",
+    "kyoto|jp": "35.0116,135.7681",
+    "toronto|ca": "43.6532,-79.3832",
+    "vancouver|ca": "49.2827,-123.1207",
+    "montreal|ca": "45.5017,-73.5673",
+    "são paulo|br": "-23.5505,-46.6333",
+    "rio de janeiro|br": "-22.9068,-43.1729",
+    "buenos aires|ar": "-34.6037,-58.3816",
+    "shanghai|cn": "31.2304,121.4737",
+    "beijing|cn": "39.9042,116.4074",
 }
 
 
@@ -236,6 +306,11 @@ RECURRING_LOW_PRIORITY_TITLES = [
 
 
 LOW_QUALITY_TITLE_WORDS = [
+    "parking",
+    "parking pass",
+    "parking lot",
+    "parkwhiz",
+    "garage",
     "international conference",
     "conference on",
     "academic",
@@ -331,6 +406,7 @@ def normalize_country_code(country):
         "us": "US",
         "usa": "US",
         "united states": "US",
+        "united states of america": "US",
         "stati uniti": "US",
         "gb": "GB",
         "uk": "GB",
@@ -349,6 +425,11 @@ def normalize_country_code(country):
         "jp": "JP",
         "japan": "JP",
         "giappone": "JP",
+        "ca": "CA",
+        "canada": "CA",
+        "cn": "CN",
+        "china": "CN",
+        "cina": "CN",
         "br": "BR",
         "brazil": "BR",
         "brasile": "BR",
@@ -360,6 +441,40 @@ def normalize_country_code(country):
         return ""
 
     return country_map.get(key, country.strip().upper())
+
+
+def normalize_request_location(city="", country=""):
+    """
+    v18: se l'utente cerca solo un paese ("giappone", "japan", "canada"),
+    lo trasformiamo in una città principale + country code.
+    Questo evita query generiche che possono far entrare eventi USA/Canada non richiesti.
+    """
+    raw_city = clean_text(city)
+    country_code = normalize_country_code(country)
+
+    if not country_code and raw_city in COUNTRY_ONLY_ALIASES:
+        country_code = COUNTRY_ONLY_ALIASES[raw_city]
+        city = DEFAULT_COUNTRY_CITY.get(country_code, "")
+
+    if country_code and not clean_text(city):
+        city = DEFAULT_COUNTRY_CITY.get(country_code, "")
+
+    return normalize_city(city), country_code
+
+
+def event_matches_requested_country(event, requested_country):
+    requested_code = normalize_country_code(requested_country)
+
+    if not requested_code:
+        return True
+
+    event_country = event.get("country") or ""
+    event_country_code = normalize_country_code(event_country)
+
+    if event_country_code == requested_code:
+        return True
+
+    return False
 
 
 def normalize_category(segment):
@@ -517,6 +632,11 @@ def should_drop_low_value_event(event):
     source = clean_text(event.get("source_name"))
 
     low_value_words = [
+        "parking",
+        "parking pass",
+        "parking lot",
+        "parkwhiz",
+        "garage",
         "flexiticket",
         "flex ticket",
         "flex-ticket",
@@ -2138,6 +2258,7 @@ def build_debug_football_payload(city="", country="", from_date="", to_date=""):
 
 
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
+    city, country = normalize_request_location(city, country)
     events = []
 
     events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
@@ -2148,6 +2269,7 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
 
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
+    events = [event for event in events if event_matches_requested_country(event, country)]
     events = [event for event in events if event_matches_requested_city(event, city)]
     events = [apply_quality_ranking(event) for event in events]
     events = filter_low_quality_events(events, category=category)
@@ -2196,7 +2318,9 @@ class Handler(BaseHTTPRequestHandler):
                     "culture_rome": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
                     "sport_rome": "/events?city=rome&country=IT&category=sport",
-                    "concert": "/events?city=new%20york&country=US&category=concert"
+                    "concert": "/events?city=new%20york&country=US&category=concert",
+                    "tokyo": "/events?city=tokyo&country=JP&from_date=2026-05-14&to_date=2026-07-25",
+                    "japan_country_search": "/events?city=giappone&from_date=2026-05-14&to_date=2026-07-25"
                 }
             })
             return
@@ -2215,7 +2339,9 @@ class Handler(BaseHTTPRequestHandler):
                 "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v17-seatgeek-debug-score-fix"
+                "country_city_fix": True,
+                "parking_filter": True,
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v18-country-city-parking-fix"
             })
             return
 
@@ -2277,6 +2403,8 @@ class Handler(BaseHTTPRequestHandler):
             from_date = query.get("from_date", [""])[0]
             to_date = query.get("to_date", [""])[0]
             category = query.get("category", [""])[0]
+
+            city, country = normalize_request_location(city, country)
 
             events = get_all_events(
                 city=city,
