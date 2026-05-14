@@ -94,6 +94,53 @@ FOOTBALL_CITY_TEAMS = {
 }
 
 
+FOOTBALL_CITY_LEAGUES = {
+    "london|gb": [
+        {"id": 39, "name": "Premier League"},
+    ],
+    "rome|it": [
+        {"id": 135, "name": "Serie A"},
+    ],
+    "milan|it": [
+        {"id": 135, "name": "Serie A"},
+    ],
+    "madrid|es": [
+        {"id": 140, "name": "La Liga"},
+    ],
+    "barcelona|es": [
+        {"id": 140, "name": "La Liga"},
+    ],
+    "paris|fr": [
+        {"id": 61, "name": "Ligue 1"},
+    ],
+    "munich|de": [
+        {"id": 78, "name": "Bundesliga"},
+    ],
+    "berlin|de": [
+        {"id": 78, "name": "Bundesliga"},
+    ],
+}
+
+
+CITY_ALIASES = {
+    "rome": ["rome", "roma"],
+    "roma": ["rome", "roma"],
+    "milan": ["milan", "milano"],
+    "milano": ["milan", "milano"],
+    "london": ["london", "londra"],
+    "londra": ["london", "londra"],
+    "paris": ["paris", "parigi"],
+    "parigi": ["paris", "parigi"],
+    "munich": ["munich", "monaco", "muenchen", "münchen"],
+    "monaco": ["munich", "monaco", "muenchen", "münchen"],
+    "new york": ["new york", "nyc"],
+    "barcelona": ["barcelona", "barcellona"],
+    "barcellona": ["barcelona", "barcellona"],
+    "berlin": ["berlin", "berlino"],
+    "berlino": ["berlin", "berlino"],
+}
+
+
 def normalize_city(city):
     key = (city or "").strip().lower()
     return CITY_MAP.get(key, city.strip())
@@ -106,38 +153,30 @@ def normalize_country_code(country):
         "it": "IT",
         "italia": "IT",
         "italy": "IT",
-
         "us": "US",
         "usa": "US",
         "united states": "US",
         "stati uniti": "US",
-
         "gb": "GB",
         "uk": "GB",
         "united kingdom": "GB",
         "regno unito": "GB",
         "great britain": "GB",
-
         "fr": "FR",
         "france": "FR",
         "francia": "FR",
-
         "es": "ES",
         "spain": "ES",
         "spagna": "ES",
-
         "de": "DE",
         "germany": "DE",
         "germania": "DE",
-
         "jp": "JP",
         "japan": "JP",
         "giappone": "JP",
-
         "br": "BR",
         "brazil": "BR",
         "brasile": "BR",
-
         "ar": "AR",
         "argentina": "AR",
     }
@@ -180,6 +219,42 @@ def normalize_category(segment):
 
 def clean_text(value):
     return (value or "").strip().lower()
+
+
+def city_aliases_for(city):
+    city_key = clean_text(city)
+    normalized = clean_text(normalize_city(city))
+    aliases = set()
+
+    aliases.add(city_key)
+    aliases.add(normalized)
+
+    for key in [city_key, normalized]:
+        for alias in CITY_ALIASES.get(key, []):
+            aliases.add(clean_text(alias))
+
+    return [alias for alias in aliases if alias]
+
+
+def event_matches_requested_city(event, requested_city):
+    if not requested_city:
+        return True
+
+    event_city = clean_text(event.get("city"))
+
+    if not event_city:
+        return True
+
+    allowed = city_aliases_for(requested_city)
+
+    if event_city in allowed:
+        return True
+
+    for alias in allowed:
+        if alias and alias in event_city:
+            return True
+
+    return False
 
 
 def normalize_event_title(title):
@@ -758,9 +833,6 @@ def get_football_season(date_string=""):
         year = int((date_string or "")[:4])
         month = int((date_string or "")[5:7])
 
-        # Stagione europea:
-        # agosto-dicembre 2025 => season 2025
-        # gennaio-giugno 2026 => season 2025
         if month >= 8:
             return year
 
@@ -786,9 +858,12 @@ def get_football_city_key(city="", country=""):
 
 def call_api_football(path, params):
     if not FOOTBALL_API_KEY:
+        print("API-Football debug: missing FOOTBALL_API_KEY")
         return None
 
     url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
+
+    print("API-Football request:", url)
 
     request = Request(
         url,
@@ -801,25 +876,147 @@ def call_api_football(path, params):
 
     try:
         with urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode("utf-8"))
+            data = json.loads(response.read().decode("utf-8"))
+
+        errors = data.get("errors")
+        if errors:
+            print("API-Football errors:", errors)
+
+        response_items = data.get("response", [])
+        print("API-Football results:", len(response_items))
+
+        return data
+
     except Exception as exc:
         print("API-Football error:", exc)
         return None
 
 
-def get_api_football_events(city="", country="", from_date="", to_date="", category="", size=80):
-    if not FOOTBALL_API_KEY:
+def football_fixture_to_event(item, normalized_city, country_code, requested_city=""):
+    fixture = item.get("fixture", {})
+    fixture_id = fixture.get("id")
+
+    fixture_date = fixture.get("date", "")
+    start_date = fixture_date[:10] if fixture_date else ""
+    start_time = fixture_date[11:19] if len(fixture_date) >= 19 else None
+
+    if not start_date:
+        return None
+
+    league = item.get("league", {})
+    teams_data = item.get("teams", {})
+    home = teams_data.get("home", {})
+    away = teams_data.get("away", {})
+    venue_data = fixture.get("venue", {})
+
+    home_name = home.get("name", "")
+    away_name = away.get("name", "")
+
+    if not home_name or not away_name:
+        return None
+
+    venue_name = venue_data.get("name") or ""
+    venue_city = venue_data.get("city") or normalized_city
+
+    event = {
+        "title": f"{home_name} vs {away_name}",
+        "category": "sport",
+        "subcategory": league.get("name") or "Football",
+        "start_date": start_date,
+        "start_time": start_time,
+        "city": venue_city,
+        "country": league.get("country") or country_code,
+        "venue": venue_name,
+        "source_name": "API-Football",
+        "source_url": None,
+        "ticket_url": None,
+        "image_url": None,
+        "price_min": None,
+        "price_max": None,
+        "currency": None,
+        "is_vip_available": False,
+        "status": fixture.get("status", {}).get("long") or "scheduled",
+        "league": league.get("name") or "Football",
+        "home_team": home_name,
+        "away_team": away_name,
+        "fixture_id": fixture_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if requested_city and not event_matches_requested_city(event, requested_city):
+        return None
+
+    event["ticket_url"] = build_ticket_search_url(event)
+    event["ai_score"] = calculate_ai_score(event)
+
+    return event
+
+
+def get_api_football_events_by_league(city="", country="", from_date="", to_date="", size=80):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+
+    leagues = FOOTBALL_CITY_LEAGUES.get(city_key, [])
+    if not leagues:
+        print("API-Football debug: no leagues mapped for", city_key)
         return []
 
-    if category and category != "sport":
-        return []
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
 
+    events = []
+    seen_fixture_ids = set()
+
+    for league in leagues:
+        params = {
+            "league": league["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+
+        data = call_api_football("/fixtures", params)
+        if not data:
+            continue
+
+        raw_fixtures = data.get("response", [])
+
+        for item in raw_fixtures:
+            fixture_id = item.get("fixture", {}).get("id")
+
+            if fixture_id and fixture_id in seen_fixture_ids:
+                continue
+
+            event = football_fixture_to_event(
+                item=item,
+                normalized_city=normalized_city,
+                country_code=country_code,
+                requested_city=city
+            )
+
+            if not event:
+                continue
+
+            if fixture_id:
+                seen_fixture_ids.add(fixture_id)
+
+            event["football_season"] = football_season
+            event["football_search_type"] = "league"
+            events.append(event)
+
+    return events[:size]
+
+
+def get_api_football_events_by_team(city="", country="", from_date="", to_date="", size=80):
     normalized_city = normalize_city(city)
     country_code = normalize_country_code(country)
     city_key = get_football_city_key(city, country)
 
     teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
     if not teams:
+        print("API-Football debug: no teams mapped for", city_key)
         return []
 
     football_from, football_to = get_default_football_dates(from_date, to_date)
@@ -845,78 +1042,59 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
         raw_fixtures = data.get("response", [])
 
         for item in raw_fixtures:
-            fixture = item.get("fixture", {})
-            fixture_id = fixture.get("id")
+            fixture_id = item.get("fixture", {}).get("id")
 
             if fixture_id and fixture_id in seen_fixture_ids:
+                continue
+
+            event = football_fixture_to_event(
+                item=item,
+                normalized_city=normalized_city,
+                country_code=country_code,
+                requested_city=city
+            )
+
+            if not event:
                 continue
 
             if fixture_id:
                 seen_fixture_ids.add(fixture_id)
 
-            fixture_date = fixture.get("date", "")
-            start_date = fixture_date[:10] if fixture_date else ""
-            start_time = fixture_date[11:19] if len(fixture_date) >= 19 else None
+            if not event.get("venue"):
+                event["venue"] = team.get("venue", "")
 
-            if not start_date:
-                continue
-
-            if from_date and start_date < from_date:
-                continue
-
-            if to_date and start_date > to_date:
-                continue
-
-            league = item.get("league", {})
-            teams_data = item.get("teams", {})
-            home = teams_data.get("home", {})
-            away = teams_data.get("away", {})
-            venue_data = fixture.get("venue", {})
-
-            home_name = home.get("name", "")
-            away_name = away.get("name", "")
-
-            if not home_name or not away_name:
-                continue
-
-            venue_name = venue_data.get("name") or team.get("venue") or ""
-            venue_city = venue_data.get("city") or normalized_city
-
-            title = f"{home_name} vs {away_name}"
-            league_name = league.get("name") or "Football"
-            country_name = league.get("country") or country_code
-
-            event = {
-                "title": title,
-                "category": "sport",
-                "subcategory": league_name,
-                "start_date": start_date,
-                "start_time": start_time,
-                "city": venue_city,
-                "country": country_name,
-                "venue": venue_name,
-                "source_name": "API-Football",
-                "source_url": None,
-                "ticket_url": None,
-                "image_url": None,
-                "price_min": None,
-                "price_max": None,
-                "currency": None,
-                "is_vip_available": False,
-                "status": fixture.get("status", {}).get("long") or "scheduled",
-                "league": league_name,
-                "home_team": home_name,
-                "away_team": away_name,
-                "fixture_id": fixture_id,
-                "football_season": football_season,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            event["ticket_url"] = build_ticket_search_url(event)
-            event["ai_score"] = calculate_ai_score(event)
-
+            event["football_season"] = football_season
+            event["football_search_type"] = "team"
             events.append(event)
+
+    return events[:size]
+
+
+def get_api_football_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not FOOTBALL_API_KEY:
+        return []
+
+    if category and category != "sport":
+        return []
+
+    league_events = get_api_football_events_by_league(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        size=size
+    )
+
+    team_events = get_api_football_events_by_team(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        size=size
+    )
+
+    events = league_events + team_events
+    events = dedupe_events(events)
 
     return events[:size]
 
@@ -952,6 +1130,7 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
     events = ticketmaster_events + predicthq_events + football_events
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
+    events = [event for event in events if event_matches_requested_city(event, city)]
 
     events.sort(key=lambda event: (
         event.get("start_date") or "",
@@ -1005,7 +1184,7 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v7-season-fix"
+                "version": "ticketmaster-predicthq-football-v8-city-filter-debug"
             })
             return
 
