@@ -2,16 +2,20 @@ import os
 import re
 import json
 from difflib import SequenceMatcher
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 PORT = int(os.environ.get("PORT", "8000"))
+
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
 PREDICT_API_KEY = os.environ.get("PREDICT_API_KEY")
 PREDICT_API_URL = os.environ.get("PREDICT_API_URL", "https://api.predicthq.com/v1/events/")
+
+FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY")
+FOOTBALL_API_BASE_URL = "https://v3.football.api-sports.io"
 
 
 CITY_MAP = {
@@ -43,6 +47,52 @@ PREDICTHQ_CATEGORY_MAP = {
     "horse_racing": "sports",
     "theatre": "performing-arts",
     "culture": "performing-arts,community,festivals,expos,conferences",
+}
+
+
+# API-Football team ids + city metadata
+# These are used to enrich city sport searches with real football fixtures.
+FOOTBALL_CITY_TEAMS = {
+    "london|gb": [
+        {"id": 42, "name": "Arsenal", "venue": "Emirates Stadium"},
+        {"id": 49, "name": "Chelsea", "venue": "Stamford Bridge"},
+        {"id": 47, "name": "Tottenham", "venue": "Tottenham Hotspur Stadium"},
+        {"id": 48, "name": "West Ham", "venue": "London Stadium"},
+        {"id": 36, "name": "Fulham", "venue": "Craven Cottage"},
+        {"id": 52, "name": "Crystal Palace", "venue": "Selhurst Park"},
+        {"id": 55, "name": "Brentford", "venue": "Gtech Community Stadium"},
+    ],
+    "rome|it": [
+        {"id": 497, "name": "AS Roma", "venue": "Stadio Olimpico"},
+        {"id": 487, "name": "Lazio", "venue": "Stadio Olimpico"},
+    ],
+    "milan|it": [
+        {"id": 489, "name": "AC Milan", "venue": "San Siro"},
+        {"id": 505, "name": "Inter", "venue": "San Siro"},
+    ],
+    "madrid|es": [
+        {"id": 541, "name": "Real Madrid", "venue": "Santiago Bernabeu"},
+        {"id": 530, "name": "Atletico Madrid", "venue": "Civitas Metropolitano"},
+        {"id": 728, "name": "Rayo Vallecano", "venue": "Campo de Futbol de Vallecas"},
+    ],
+    "barcelona|es": [
+        {"id": 529, "name": "Barcelona", "venue": "Camp Nou"},
+        {"id": 540, "name": "Espanyol", "venue": "RCDE Stadium"},
+    ],
+    "paris|fr": [
+        {"id": 85, "name": "Paris Saint Germain", "venue": "Parc des Princes"},
+    ],
+    "munich|de": [
+        {"id": 157, "name": "Bayern Munich", "venue": "Allianz Arena"},
+    ],
+    "berlin|de": [
+        {"id": 182, "name": "Union Berlin", "venue": "Stadion An der Alten Forsterei"},
+        {"id": 159, "name": "Hertha Berlin", "venue": "Olympiastadion Berlin"},
+    ],
+    "new york|us": [
+        {"id": 1608, "name": "New York City FC", "venue": "Yankee Stadium"},
+        {"id": 1602, "name": "New York Red Bulls", "venue": "Red Bull Arena"},
+    ],
 }
 
 
@@ -114,6 +164,9 @@ def normalize_category(segment):
 
     if "horse" in s or "equestrian" in s:
         return "horse_racing"
+
+    if "football" in s or "soccer" in s:
+        return "sport"
 
     if "sports" in s or "sport" in s:
         return "sport"
@@ -201,7 +254,6 @@ def should_drop_low_value_event(event):
         if word in title:
             return True
 
-    # Riduce eventi turistici/ripetitivi da Ticketmaster
     if source == "ticketmaster":
         museum_words = [
             "museum",
@@ -235,6 +287,9 @@ def event_quality_score(event):
     if source == "ticketmaster":
         score += 8
 
+    if source == "api-football":
+        score += 12
+
     if source == "predicthq":
         score += 3
 
@@ -256,7 +311,6 @@ def dedupe_events(events):
             continue
         filtered.append(event)
 
-    # Prima gli eventi migliori, così quando ci sono duplicati teniamo quello più utile
     filtered.sort(key=event_quality_score, reverse=True)
 
     unique = []
@@ -349,6 +403,19 @@ def calculate_ai_score(event):
         "la liga",
         "j league",
         "npb",
+        "arsenal",
+        "chelsea",
+        "tottenham",
+        "liverpool",
+        "manchester",
+        "roma",
+        "lazio",
+        "inter",
+        "milan",
+        "real madrid",
+        "barcelona",
+        "psg",
+        "bayern",
     ]
 
     iconic_venues = [
@@ -365,6 +432,11 @@ def calculate_ai_score(event):
         "auditorium parco della musica",
         "maracana",
         "la bombonera",
+        "emirates stadium",
+        "stamford bridge",
+        "tottenham hotspur stadium",
+        "parc des princes",
+        "allianz arena",
     ]
 
     for word in premium_words:
@@ -378,6 +450,9 @@ def calculate_ai_score(event):
     if category in ["sport", "motorsport", "horse_racing", "concert", "theatre"]:
         score += 5
 
+    if source_name == "api-football":
+        score += 15
+
     if source_name == "predicthq":
         rank = event.get("rank")
         try:
@@ -387,6 +462,21 @@ def calculate_ai_score(event):
             pass
 
     return min(score, 100)
+
+
+def build_ticket_search_url(event):
+    query = " ".join([
+        str(event.get("title") or ""),
+        str(event.get("city") or ""),
+        str(event.get("country") or ""),
+        str(event.get("start_date") or ""),
+        "tickets"
+    ]).strip()
+
+    if not query:
+        return None
+
+    return "https://www.google.com/search?" + urlencode({"q": query})
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -478,7 +568,6 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         mapped_category = normalize_category(" ".join([segment, genre, subgenre]))
 
         if category and mapped_category != category:
-            # motorsport e horse_racing possono arrivare come sport generico
             if category in ["motorsport", "horse_racing"] and mapped_category == "sport":
                 title_check = clean_text(item.get("name", ""))
                 genre_check = clean_text(" ".join([segment, genre, subgenre]))
@@ -643,10 +732,172 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+        event["ticket_url"] = build_ticket_search_url(event)
         event["ai_score"] = calculate_ai_score(event)
         events.append(event)
 
     return events
+
+
+def get_default_football_dates(from_date="", to_date=""):
+    today = datetime.now(timezone.utc).date()
+
+    if from_date:
+        start = from_date
+    else:
+        start = today.isoformat()
+
+    if to_date:
+        end = to_date
+    else:
+        end = (today + timedelta(days=180)).isoformat()
+
+    return start, end
+
+
+def get_football_city_key(city="", country=""):
+    normalized_city = clean_text(normalize_city(city))
+    country_code = clean_text(normalize_country_code(country))
+
+    if not normalized_city or not country_code:
+        return ""
+
+    return f"{normalized_city}|{country_code}"
+
+
+def call_api_football(path, params):
+    if not FOOTBALL_API_KEY:
+        return None
+
+    url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "x-apisports-key": FOOTBALL_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("API-Football error:", exc)
+        return None
+
+
+def get_api_football_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not FOOTBALL_API_KEY:
+        return []
+
+    # We use API-Football only for general searches or sport searches.
+    if category and category != "sport":
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+
+    teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
+    if not teams:
+        return []
+
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    events = []
+    seen_fixture_ids = set()
+
+    # Keep usage reasonable on the free API plan.
+    teams = teams[:8]
+
+    for team in teams:
+        params = {
+            "team": team["id"],
+            "from": football_from,
+            "to": football_to,
+        }
+
+        data = call_api_football("/fixtures", params)
+        if not data:
+            continue
+
+        raw_fixtures = data.get("response", [])
+
+        for item in raw_fixtures:
+            fixture = item.get("fixture", {})
+            fixture_id = fixture.get("id")
+
+            if fixture_id and fixture_id in seen_fixture_ids:
+                continue
+
+            if fixture_id:
+                seen_fixture_ids.add(fixture_id)
+
+            fixture_date = fixture.get("date", "")
+            start_date = fixture_date[:10] if fixture_date else ""
+            start_time = fixture_date[11:19] if len(fixture_date) >= 19 else None
+
+            if not start_date:
+                continue
+
+            if from_date and start_date < from_date:
+                continue
+
+            if to_date and start_date > to_date:
+                continue
+
+            league = item.get("league", {})
+            teams_data = item.get("teams", {})
+            home = teams_data.get("home", {})
+            away = teams_data.get("away", {})
+            venue_data = fixture.get("venue", {})
+
+            home_name = home.get("name", "")
+            away_name = away.get("name", "")
+
+            if not home_name or not away_name:
+                continue
+
+            venue_name = venue_data.get("name") or team.get("venue") or ""
+            venue_city = venue_data.get("city") or normalized_city
+
+            title = f"{home_name} vs {away_name}"
+            league_name = league.get("name") or "Football"
+            country_name = league.get("country") or country_code
+
+            event = {
+                "title": title,
+                "category": "sport",
+                "subcategory": league_name,
+                "start_date": start_date,
+                "start_time": start_time,
+                "city": venue_city,
+                "country": country_name,
+                "venue": venue_name,
+                "source_name": "API-Football",
+                "source_url": None,
+                "ticket_url": None,
+                "image_url": None,
+                "price_min": None,
+                "price_max": None,
+                "currency": None,
+                "is_vip_available": False,
+                "status": fixture.get("status", {}).get("long") or "scheduled",
+                "league": league_name,
+                "home_team": home_name,
+                "away_team": away_name,
+                "fixture_id": fixture_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            event["ticket_url"] = build_ticket_search_url(event)
+            event["ai_score"] = calculate_ai_score(event)
+
+            events.append(event)
+
+    return events[:size]
 
 
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -668,7 +919,16 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
         size=size
     )
 
-    events = ticketmaster_events + predicthq_events
+    football_events = get_api_football_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        size=size
+    )
+
+    events = ticketmaster_events + predicthq_events + football_events
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
 
@@ -704,11 +964,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ",
+                "provider": "Ticketmaster + PredictHQ + API-Football",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
-                    "sport": "/events?city=london&country=GB&category=sport",
+                    "sport_london": "/events?city=london&country=GB&category=sport",
+                    "sport_rome": "/events?city=rome&country=IT&category=sport",
                     "concert": "/events?city=new%20york&country=US&category=concert"
                 }
             })
@@ -718,11 +979,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ",
+                "provider": "Ticketmaster + PredictHQ + API-Football",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
-                "version": "ticketmaster-predicthq-advanced-dedupe-v5"
+                "football_api_key_present": bool(FOOTBALL_API_KEY),
+                "version": "ticketmaster-predicthq-football-v6"
             })
             return
 
