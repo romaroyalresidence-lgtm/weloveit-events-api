@@ -50,8 +50,6 @@ PREDICTHQ_CATEGORY_MAP = {
 }
 
 
-# API-Football team ids + city metadata
-# These are used to enrich city sport searches with real football fixtures.
 FOOTBALL_CITY_TEAMS = {
     "london|gb": [
         {"id": 42, "name": "Arsenal", "venue": "Emirates Stadium"},
@@ -755,6 +753,27 @@ def get_default_football_dates(from_date="", to_date=""):
     return start, end
 
 
+def get_football_season(date_string=""):
+    try:
+        year = int((date_string or "")[:4])
+        month = int((date_string or "")[5:7])
+
+        # Stagione europea:
+        # agosto-dicembre 2025 => season 2025
+        # gennaio-giugno 2026 => season 2025
+        if month >= 8:
+            return year
+
+        return year - 1
+    except Exception:
+        today = datetime.now(timezone.utc).date()
+
+        if today.month >= 8:
+            return today.year
+
+        return today.year - 1
+
+
 def get_football_city_key(city="", country=""):
     normalized_city = clean_text(normalize_city(city))
     country_code = clean_text(normalize_country_code(country))
@@ -792,7 +811,6 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
     if not FOOTBALL_API_KEY:
         return []
 
-    # We use API-Football only for general searches or sport searches.
     if category and category != "sport":
         return []
 
@@ -805,15 +823,17 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
         return []
 
     football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
+
     events = []
     seen_fixture_ids = set()
 
-    # Keep usage reasonable on the free API plan.
     teams = teams[:8]
 
     for team in teams:
         params = {
             "team": team["id"],
+            "season": football_season,
             "from": football_from,
             "to": football_to,
         }
@@ -888,6 +908,7 @@ def get_api_football_events(city="", country="", from_date="", to_date="", categ
                 "home_team": home_name,
                 "away_team": away_name,
                 "fixture_id": fixture_id,
+                "football_season": football_season,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -984,7 +1005,7 @@ class Handler(BaseHTTPRequestHandler):
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v6"
+                "version": "ticketmaster-predicthq-football-v7-season-fix"
             })
             return
 
