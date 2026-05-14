@@ -508,6 +508,72 @@ def event_matches_requested_country(event, requested_country):
     return False
 
 
+def serpapi_address_matches_city(address_parts, requested_city="", requested_country=""):
+    """
+    v21: Google Events può restituire risultati vicini ma non pertinenti.
+    Per Tokyo accettiamo Tokyo e alcune aree metropolitane vicine, ma scartiamo città lontane tipo Nagoya.
+    """
+    requested_city_clean = clean_text(normalize_city(requested_city))
+    country_code = normalize_country_code(requested_country)
+    address_text = clean_text(" ".join([str(part) for part in (address_parts or [])]))
+
+    if not requested_city_clean:
+        return True
+
+    if requested_city_clean in address_text:
+        return True
+
+    if country_code == "JP" and requested_city_clean == "tokyo":
+        tokyo_area_terms = [
+            "tokyo",
+            "minato",
+            "shibuya",
+            "shinjuku",
+            "chiyoda",
+            "taito",
+            "sumida",
+            "ginza",
+            "akasaka",
+            "roppongi",
+            "meguro",
+            "setagaya",
+            "saitama",
+            "yokohama",
+            "chiba",
+            "kawasaki",
+        ]
+        far_japan_terms = [
+            "nagoya",
+            "kyoto",
+            "osaka",
+            "fukuoka",
+            "sapporo",
+            "hiroshima",
+            "kobe",
+        ]
+
+        if any(term in address_text for term in far_japan_terms):
+            return False
+
+        return any(term in address_text for term in tokyo_area_terms)
+
+    aliases = city_aliases_for(requested_city_clean)
+    return any(alias and alias in address_text for alias in aliases)
+
+
+def source_priority(event):
+    source = clean_text(event.get("source_name"))
+    priority = {
+        "seatgeek": 100,
+        "ticketmaster": 95,
+        "serpapi": 80,
+        "api-football": 75,
+        "predicthq": 60,
+        "japan local fallback": 40,
+    }
+    return priority.get(source, 50)
+
+
 def normalize_category(segment):
     if not segment:
         return "event"
@@ -960,7 +1026,7 @@ def dedupe_events(events):
             continue
         filtered.append(event)
 
-    filtered.sort(key=event_quality_score, reverse=True)
+    filtered.sort(key=lambda event: (source_priority(event), event_quality_score(event)), reverse=True)
 
     unique = []
 
@@ -1934,6 +2000,10 @@ def get_serpapi_events(city="", country="", from_date="", to_date="", category="
                 continue
 
             address_parts = item.get("address") or []
+
+            if not serpapi_address_matches_city(address_parts, normalized_city, country_code):
+                continue
+
             address_text = ", ".join([str(part) for part in address_parts if part])
 
             venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
@@ -2023,10 +2093,12 @@ def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", c
 
             sample = []
             for item in raw_events[:3]:
+                address_parts = item.get("address") or []
                 sample.append({
                     "title": item.get("title"),
                     "date": item.get("date"),
                     "address": item.get("address"),
+                    "address_matches_city": serpapi_address_matches_city(address_parts, normalized_city, country_code),
                     "link": item.get("link"),
                     "thumbnail": bool(item.get("thumbnail")),
                 })
@@ -2821,11 +2893,13 @@ class Handler(BaseHTTPRequestHandler):
                 "serpapi_api_key_present": bool(SERPAPI_API_KEY),
                 "serpapi_query_expansion": True,
                 "japan_local_fallback": True,
+                "serpapi_location_filter": True,
+                "advanced_source_priority": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v20-query-expansion"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v21-location-merge"
             })
             return
 
