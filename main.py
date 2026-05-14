@@ -806,8 +806,8 @@ def calculate_ai_score(event):
 
     return min(score, 98)
     def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
-    if not TICKETMASTER_API_KEY:
-        return []
+        if not TICKETMASTER_API_KEY:
+            return []
 
     normalized_city = normalize_city(city)
     country_code = normalize_country_code(country)
