@@ -23,6 +23,10 @@ FOOTBALL_API_BASE_URL = "https://v3.football.api-sports.io"
 EVENTBRITE_API_KEY = os.environ.get("EVENTBRITE_API_KEY")
 EVENTBRITE_API_BASE_URL = "https://www.eventbriteapi.com/v3"
 
+SEATGEEK_CLIENT_ID = os.environ.get("SEATGEEK_CLIENT_ID")
+SEATGEEK_CLIENT_SECRET = os.environ.get("SEATGEEK_CLIENT_SECRET")
+SEATGEEK_API_BASE_URL = "https://api.seatgeek.com/2"
+
 
 CITY_MAP = {
     "roma": "Rome",
@@ -66,6 +70,25 @@ PREDICTHQ_CATEGORY_MAP = {
     "horse_racing": "sports",
     "theatre": "performing-arts",
     "culture": "performing-arts,community,festivals,expos,conferences",
+}
+
+
+SEATGEEK_CITY_GEO = {
+    "new york|us": "40.7128,-74.0060",
+    "los angeles|us": "34.0522,-118.2437",
+    "las vegas|us": "36.1699,-115.1398",
+    "miami|us": "25.7617,-80.1918",
+    "chicago|us": "41.8781,-87.6298",
+    "san francisco|us": "37.7749,-122.4194",
+    "london|gb": "51.5074,-0.1278",
+    "paris|fr": "48.8566,2.3522",
+    "rome|it": "41.9028,12.4964",
+    "milan|it": "45.4642,9.1900",
+    "madrid|es": "40.4168,-3.7038",
+    "barcelona|es": "41.3851,2.1734",
+    "berlin|de": "52.5200,13.4050",
+    "munich|de": "48.1351,11.5820",
+    "tokyo|jp": "35.6762,139.6503",
 }
 
 
@@ -550,6 +573,9 @@ def calculate_quality_adjustment(event):
     if source == "ticketmaster":
         adjustment += 6
 
+    if source == "seatgeek":
+        adjustment += 8
+
     if source == "api-football":
         adjustment += 8
 
@@ -656,6 +682,9 @@ def event_quality_score(event):
 
     if source == "ticketmaster":
         score += 8
+
+    if source == "seatgeek":
+        score += 9
 
     if source == "api-football":
         score += 7
@@ -1089,6 +1118,9 @@ def calculate_ai_score(event):
     if source_name == "ticketmaster":
         score += 5
 
+    if source_name == "seatgeek":
+        score += 7
+
     if source_name == "api-football":
         score += 7
 
@@ -1116,6 +1148,252 @@ def calculate_ai_score(event):
         score += 6
 
     return min(score, 98)
+
+
+
+def normalize_seatgeek_type(category):
+    if category == "sport":
+        return "sports"
+    if category == "concert":
+        return "concert"
+    if category == "theatre":
+        return "theater"
+    if category == "culture":
+        return ""
+    return ""
+
+
+def get_seatgeek_geo(city="", country=""):
+    city_key = get_football_city_key(city, country)
+    return SEATGEEK_CITY_GEO.get(city_key, "")
+
+
+def parse_seatgeek_datetime(value):
+    if not value:
+        return "", None
+
+    # SeatGeek normalmente ritorna datetime_local tipo 2026-06-12T20:00:00
+    start_date = value[:10] if len(value) >= 10 else ""
+    start_time = value[11:19] if len(value) >= 19 else None
+    return start_date, start_time
+
+
+def get_seatgeek_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not SEATGEEK_CLIENT_ID:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    geo = get_seatgeek_geo(city, country)
+
+    params = {
+        "client_id": SEATGEEK_CLIENT_ID,
+        "per_page": min(size, 50),
+        "sort": "datetime_local.asc",
+    }
+
+    # Secret è opzionale per molte chiamate SeatGeek, ma se disponibile lo inviamo.
+    if SEATGEEK_CLIENT_SECRET:
+        params["client_secret"] = SEATGEEK_CLIENT_SECRET
+
+    if geo:
+        params["lat"] = geo.split(",")[0]
+        params["lon"] = geo.split(",")[1]
+        params["range"] = "50mi"
+    elif normalized_city:
+        params["venue.city"] = normalized_city
+
+    sg_type = normalize_seatgeek_type(category)
+    if sg_type:
+        params["type"] = sg_type
+
+    if from_date:
+        params["datetime_local.gte"] = f"{from_date}T00:00:00"
+
+    if to_date:
+        params["datetime_local.lte"] = f"{to_date}T23:59:59"
+
+    url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("SeatGeek error:", exc)
+        return []
+
+    raw_events = data.get("events", [])
+    events = []
+
+    for item in raw_events:
+        title = item.get("title") or item.get("short_title") or "Unknown event"
+        start_date, start_time = parse_seatgeek_datetime(item.get("datetime_local") or item.get("datetime_utc"))
+
+        if not start_date:
+            continue
+
+        venue = item.get("venue") or {}
+        city_name = venue.get("city") or normalized_city
+        country_name = venue.get("country") or country_code
+        venue_name = venue.get("name") or ""
+
+        if normalized_city and city_name:
+            if clean_text(normalized_city) not in clean_text(city_name) and clean_text(city_name) not in city_aliases_for(normalized_city):
+                continue
+
+        performers = item.get("performers") or []
+        image_url = None
+        if performers:
+            image_url = (
+                performers[0].get("image")
+                or performers[0].get("images", {}).get("huge")
+                or performers[0].get("images", {}).get("large")
+            )
+
+        stats = item.get("stats") or {}
+        price_min = stats.get("lowest_price")
+        price_max = stats.get("highest_price")
+
+        taxonomies = item.get("taxonomies") or []
+        taxonomy_names = " ".join([str(t.get("name") or "") for t in taxonomies])
+        mapped_category = normalize_category(taxonomy_names or item.get("type") or "")
+
+        # SeatGeek usa "theater"; normalizziamo meglio.
+        if "theater" in clean_text(item.get("type")) or "theater" in clean_text(taxonomy_names):
+            mapped_category = "theatre"
+
+        if category and mapped_category != category:
+            # sport/concert/theatre sono severi; culture può includere theatre/concert.
+            if not (category == "culture" and mapped_category in ["culture", "theatre", "concert"]):
+                continue
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": item.get("type") or taxonomy_names or "SeatGeek event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "SeatGeek",
+            "source_url": item.get("url"),
+            "ticket_url": item.get("url"),
+            "image_url": image_url,
+            "price_min": price_min,
+            "price_max": price_max,
+            "currency": "USD" if country_code == "US" else None,
+            "is_vip_available": False,
+            "status": "active",
+            "seatgeek_score": item.get("score"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event = enhance_eventbrite_fallback(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    geo = get_seatgeek_geo(city, country)
+
+    params = {
+        "client_id": "***" if SEATGEEK_CLIENT_ID else "",
+        "per_page": 5,
+        "sort": "datetime_local.asc",
+    }
+
+    if geo:
+        params["lat"] = geo.split(",")[0]
+        params["lon"] = geo.split(",")[1]
+        params["range"] = "50mi"
+    elif normalized_city:
+        params["venue.city"] = normalized_city
+
+    sg_type = normalize_seatgeek_type(category)
+    if sg_type:
+        params["type"] = sg_type
+
+    if from_date:
+        params["datetime_local.gte"] = f"{from_date}T00:00:00"
+
+    if to_date:
+        params["datetime_local.lte"] = f"{to_date}T23:59:59"
+
+    real_params = dict(params)
+    if SEATGEEK_CLIENT_ID:
+        real_params["client_id"] = SEATGEEK_CLIENT_ID
+    if SEATGEEK_CLIENT_SECRET:
+        real_params["client_secret"] = SEATGEEK_CLIENT_SECRET
+
+    url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(real_params)
+
+    if not SEATGEEK_CLIENT_ID:
+        return {
+            "seatgeek_client_id_present": False,
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "error": "missing SEATGEEK_CLIENT_ID",
+        }
+
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        sample = []
+        for item in data.get("events", [])[:5]:
+            venue = item.get("venue") or {}
+            sample.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "type": item.get("type"),
+                "datetime_local": item.get("datetime_local"),
+                "venue": venue.get("name"),
+                "city": venue.get("city"),
+                "country": venue.get("country"),
+                "url": item.get("url"),
+            })
+
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": True,
+            "status_code": status_code,
+            "request_url": safe_url,
+            "events_count": len(data.get("events", [])),
+            "meta": data.get("meta"),
+            "sample": sample,
+        }
+
+    except Exception as exc:
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "error": str(exc),
+            "request_url": safe_url,
+        }
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -1742,6 +2020,7 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
     events = []
 
     events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
+    events += get_seatgeek_events(city, country, from_date, to_date, category, size)
     events += get_predicthq_events(city, country, from_date, to_date, category, size)
     events += get_api_football_events(city, country, from_date, to_date, category, size)
     events += get_eventbrite_events(city, country, from_date, to_date, category, size)
@@ -1786,11 +2065,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + PredictHQ + API-Football + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
                     "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
+                    "debug_seatgeek": "/debug-seatgeek?city=new%20york&country=US&category=concert",
                     "debug_eventbrite": "/debug-eventbrite?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "culture_rome": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
@@ -1804,14 +2084,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + PredictHQ + API-Football + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
                 "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
+                "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+                "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
                 "eventbrite_mode": "fallback_only",
-                "version": "ticketmaster-predicthq-football-eventbrite-v15-quality-ranking"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v16"
             })
             return
 
@@ -1826,6 +2108,24 @@ class Handler(BaseHTTPRequestHandler):
                 country=country,
                 from_date=from_date,
                 to_date=to_date
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-seatgeek":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            payload = build_debug_seatgeek_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
             )
 
             self.send_json(payload)
