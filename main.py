@@ -1,5 +1,7 @@
 import os
+import re
 import json
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
@@ -37,8 +39,10 @@ CITY_MAP = {
 PREDICTHQ_CATEGORY_MAP = {
     "concert": "concerts,festivals,performing-arts",
     "sport": "sports",
+    "motorsport": "sports",
+    "horse_racing": "sports",
     "theatre": "performing-arts",
-    "culture": "performing-arts,community,festivals,expos",
+    "culture": "performing-arts,community,festivals,expos,conferences",
 }
 
 
@@ -54,26 +58,40 @@ def normalize_country_code(country):
         "it": "IT",
         "italia": "IT",
         "italy": "IT",
+
         "us": "US",
         "usa": "US",
         "united states": "US",
         "stati uniti": "US",
+
         "gb": "GB",
         "uk": "GB",
         "united kingdom": "GB",
         "regno unito": "GB",
+        "great britain": "GB",
+
         "fr": "FR",
         "france": "FR",
         "francia": "FR",
+
         "es": "ES",
         "spain": "ES",
         "spagna": "ES",
+
         "de": "DE",
         "germany": "DE",
         "germania": "DE",
+
         "jp": "JP",
         "japan": "JP",
         "giappone": "JP",
+
+        "br": "BR",
+        "brazil": "BR",
+        "brasile": "BR",
+
+        "ar": "AR",
+        "argentina": "AR",
     }
 
     if not key:
@@ -90,11 +108,20 @@ def normalize_category(segment):
 
     if "music" in s or "concert" in s or "festival" in s:
         return "concert"
+
+    if "motorsport" in s or "motor" in s or "racing" in s or "formula" in s or "grand prix" in s:
+        return "motorsport"
+
+    if "horse" in s or "equestrian" in s:
+        return "horse_racing"
+
     if "sports" in s or "sport" in s:
         return "sport"
+
     if "arts" in s or "theatre" in s or "theater" in s or "performing" in s:
         return "theatre"
-    if "film" in s or "community" in s or "expo" in s:
+
+    if "film" in s or "community" in s or "expo" in s or "conference" in s:
         return "culture"
 
     return "event"
@@ -104,27 +131,162 @@ def clean_text(value):
     return (value or "").strip().lower()
 
 
-def make_dedupe_key(event):
-    return "|".join([
-        clean_text(event.get("title")),
-        clean_text(event.get("venue")),
-        clean_text(event.get("city")),
-        clean_text(event.get("country")),
-        clean_text(event.get("start_date")),
-    ])
+def normalize_event_title(title):
+    title = clean_text(title)
+
+    remove_words = [
+        "flexiticket",
+        "flex ticket",
+        "flex-ticket",
+        "standard ticket",
+        "skip the line",
+        "skip-the-line",
+        "entry ticket",
+        "entrance ticket",
+        "admission ticket",
+        "general admission",
+        "official ticket",
+        "tickets",
+        "ticket",
+        "vip",
+        "experience",
+        "tour",
+        "guided tour",
+        "museum",
+        "museo",
+    ]
+
+    for word in remove_words:
+        title = title.replace(word, " ")
+
+    title = re.sub(r"[^a-z0-9\s]", " ", title)
+    title = re.sub(r"\s+", " ", title).strip()
+
+    return title
+
+
+def similar_text(a, b):
+    a = normalize_event_title(a)
+    b = normalize_event_title(b)
+
+    if not a or not b:
+        return False
+
+    if a == b:
+        return True
+
+    if a in b or b in a:
+        return True
+
+    ratio = SequenceMatcher(None, a, b).ratio()
+    return ratio >= 0.82
+
+
+def should_drop_low_value_event(event):
+    title = clean_text(event.get("title"))
+    source = clean_text(event.get("source_name"))
+
+    low_value_words = [
+        "flexiticket",
+        "flex ticket",
+        "flex-ticket",
+        "museum flex",
+        "standard admission",
+        "general admission",
+        "skip the line",
+        "skip-the-line",
+    ]
+
+    for word in low_value_words:
+        if word in title:
+            return True
+
+    # Riduce eventi turistici/ripetitivi da Ticketmaster
+    if source == "ticketmaster":
+        museum_words = [
+            "museum",
+            "museo",
+            "exhibition ticket",
+            "entry ticket",
+            "admission ticket",
+        ]
+
+        for word in museum_words:
+            if word in title:
+                return True
+
+    return False
+
+
+def event_quality_score(event):
+    score = event.get("ai_score") or 0
+
+    if event.get("ticket_url"):
+        score += 20
+
+    if event.get("image_url"):
+        score += 10
+
+    if event.get("venue"):
+        score += 5
+
+    source = clean_text(event.get("source_name"))
+
+    if source == "ticketmaster":
+        score += 8
+
+    if source == "predicthq":
+        score += 3
+
+    rank = event.get("rank")
+    try:
+        if rank:
+            score += min(int(rank) // 10, 10)
+    except Exception:
+        pass
+
+    return score
 
 
 def dedupe_events(events):
-    seen = set()
-    unique = []
+    filtered = []
 
     for event in events:
-        key = make_dedupe_key(event)
-        if key in seen:
+        if should_drop_low_value_event(event):
             continue
+        filtered.append(event)
 
-        seen.add(key)
-        unique.append(event)
+    # Prima gli eventi migliori, così quando ci sono duplicati teniamo quello più utile
+    filtered.sort(key=event_quality_score, reverse=True)
+
+    unique = []
+
+    for event in filtered:
+        title = event.get("title")
+        venue = clean_text(event.get("venue"))
+        city = clean_text(event.get("city"))
+        country = clean_text(event.get("country"))
+        start_date = clean_text(event.get("start_date"))
+
+        duplicate = False
+
+        for existing in unique:
+            same_date = clean_text(existing.get("start_date")) == start_date
+            same_city = clean_text(existing.get("city")) == city
+            same_country = clean_text(existing.get("country")) == country
+            same_venue = clean_text(existing.get("venue")) == venue
+            title_similar = similar_text(title, existing.get("title"))
+
+            if same_date and same_city and same_country and title_similar:
+                duplicate = True
+                break
+
+            if same_date and same_venue and title_similar:
+                duplicate = True
+                break
+
+        if not duplicate:
+            unique.append(event)
 
     return unique
 
@@ -181,6 +343,12 @@ def calculate_ai_score(event):
         "concert",
         "festival",
         "musical",
+        "premier league",
+        "champions league",
+        "serie a",
+        "la liga",
+        "j league",
+        "npb",
     ]
 
     iconic_venues = [
@@ -195,6 +363,8 @@ def calculate_ai_score(event):
         "camp nou",
         "santiago bernabeu",
         "auditorium parco della musica",
+        "maracana",
+        "la bombonera",
     ]
 
     for word in premium_words:
@@ -205,7 +375,7 @@ def calculate_ai_score(event):
         if place in venue:
             score += 5
 
-    if category in ["sport", "concert", "theatre"]:
+    if category in ["sport", "motorsport", "horse_racing", "concert", "theatre"]:
         score += 5
 
     if source_name == "predicthq":
@@ -244,7 +414,7 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
     if to_date:
         params["endDateTime"] = f"{to_date}T23:59:59Z"
 
-    if category == "sport":
+    if category in ["sport", "motorsport", "horse_racing"]:
         params["classificationName"] = "sports"
     elif category == "concert":
         params["classificationName"] = "music"
@@ -298,15 +468,30 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         classifications = item.get("classifications", [])
         segment = ""
         genre = ""
+        subgenre = ""
 
         if classifications:
             segment = classifications[0].get("segment", {}).get("name", "")
             genre = classifications[0].get("genre", {}).get("name", "")
+            subgenre = classifications[0].get("subGenre", {}).get("name", "")
 
-        mapped_category = normalize_category(segment)
+        mapped_category = normalize_category(" ".join([segment, genre, subgenre]))
 
         if category and mapped_category != category:
-            continue
+            # motorsport e horse_racing possono arrivare come sport generico
+            if category in ["motorsport", "horse_racing"] and mapped_category == "sport":
+                title_check = clean_text(item.get("name", ""))
+                genre_check = clean_text(" ".join([segment, genre, subgenre]))
+
+                if category == "motorsport":
+                    if not any(word in title_check or word in genre_check for word in ["motor", "racing", "formula", "grand prix"]):
+                        continue
+
+                if category == "horse_racing":
+                    if not any(word in title_check or word in genre_check for word in ["horse", "equestrian", "racing"]):
+                        continue
+            else:
+                continue
 
         price_min = None
         price_max = None
@@ -321,7 +506,7 @@ def get_ticketmaster_events(city="", country="", from_date="", to_date="", categ
         event = {
             "title": item.get("name", "Unknown event"),
             "category": mapped_category,
-            "subcategory": genre or segment or "Live event",
+            "subcategory": subgenre or genre or segment or "Live event",
             "start_date": start_date,
             "start_time": start_time,
             "city": city_name,
@@ -375,7 +560,8 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
     if phq_category:
         params["category"] = phq_category
 
-    url = PREDICT_API_URL + "?" + urlencode(params)
+    url = PREDICT_API_URL.rstrip("/") + "/?" + urlencode(params)
+
     request = Request(
         url,
         headers={
@@ -414,7 +600,16 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
         mapped_category = normalize_category(phq_category)
 
         if category and mapped_category != category:
-            continue
+            if category in ["motorsport", "horse_racing"] and mapped_category == "sport":
+                title_check = clean_text(title)
+                if category == "motorsport":
+                    if not any(word in title_check for word in ["motor", "racing", "formula", "grand prix"]):
+                        continue
+                if category == "horse_racing":
+                    if not any(word in title_check for word in ["horse", "equestrian", "racing"]):
+                        continue
+            else:
+                continue
 
         location = item.get("geo", {}).get("address", {})
         city_name = location.get("locality") or normalized_city
@@ -512,7 +707,9 @@ class Handler(BaseHTTPRequestHandler):
                 "provider": "Ticketmaster + PredictHQ",
                 "endpoints": {
                     "health": "/health",
-                    "events": "/events?city=rome&country=IT"
+                    "events": "/events?city=rome&country=IT",
+                    "sport": "/events?city=london&country=GB&category=sport",
+                    "concert": "/events?city=new%20york&country=US&category=concert"
                 }
             })
             return
@@ -525,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
-                "version": "ticketmaster-predicthq-country-filtered-v4"
+                "version": "ticketmaster-predicthq-advanced-dedupe-v5"
             })
             return
 
