@@ -27,6 +27,9 @@ SEATGEEK_CLIENT_ID = os.environ.get("SEATGEEK_CLIENT_ID")
 SEATGEEK_CLIENT_SECRET = os.environ.get("SEATGEEK_CLIENT_SECRET")
 SEATGEEK_API_BASE_URL = "https://api.seatgeek.com/2"
 
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
+SERPAPI_API_BASE_URL = "https://serpapi.com/search.json"
+
 
 CITY_MAP = {
     "roma": "Rome",
@@ -130,6 +133,18 @@ PREDICTHQ_CATEGORY_MAP = {
     "horse_racing": "sports",
     "theatre": "performing-arts",
     "culture": "performing-arts,community,festivals,expos,conferences",
+}
+
+
+SERPAPI_CATEGORY_QUERY_MAP = {
+    "concert": "concerts live music festivals",
+    "sport": "sports matches games tickets",
+    "motorsport": "motorsport racing grand prix",
+    "horse_racing": "horse racing events",
+    "theatre": "theatre shows musicals performing arts",
+    "culture": "events exhibitions festivals conferences",
+    "event": "events",
+    "": "events",
 }
 
 
@@ -767,6 +782,8 @@ def apply_quality_ranking(event):
         score += 13
     elif source == "api-football":
         score += 11
+    elif source == "serpapi":
+        score += 6
     elif source == "predicthq":
         score += 4
 
@@ -903,6 +920,9 @@ def event_quality_score(event):
 
     if source == "seatgeek":
         score += 9
+
+    if source == "serpapi":
+        score += 6
 
     if source == "api-football":
         score += 7
@@ -1340,6 +1360,9 @@ def calculate_ai_score(event):
     if source_name == "seatgeek":
         score += 7
 
+    if source_name == "serpapi":
+        score += 5
+
     if source_name == "api-football":
         score += 7
 
@@ -1635,6 +1658,336 @@ def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", 
             "error": str(exc),
             "request_url": safe_url,
         }
+
+
+
+def build_serpapi_query(city="", country="", category="", from_date="", to_date=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    category_terms = SERPAPI_CATEGORY_QUERY_MAP.get(category, SERPAPI_CATEGORY_QUERY_MAP.get("", "events"))
+
+    date_terms = ""
+    if from_date and to_date:
+        date_terms = f"from {from_date} to {to_date}"
+    elif from_date:
+        date_terms = f"after {from_date}"
+    elif to_date:
+        date_terms = f"before {to_date}"
+
+    parts = [
+        category_terms,
+        "in",
+        normalized_city,
+        country_name,
+        date_terms,
+    ]
+
+    return " ".join([str(part).strip() for part in parts if str(part).strip()])
+
+
+def parse_serpapi_date(date_info, fallback_from_date=""):
+    """
+    SerpApi Google Events può restituire date in forme diverse:
+    - {"start_date": "May 22", "when": "..."}
+    - stringhe dentro "date"
+    Qui facciamo best-effort. Se non riusciamo a parsare l'anno, usiamo l'anno di fallback.
+    """
+    if not date_info:
+        return "", None
+
+    year = ""
+    if fallback_from_date and len(fallback_from_date) >= 4:
+        year = fallback_from_date[:4]
+    else:
+        year = str(datetime.now(timezone.utc).year)
+
+    if isinstance(date_info, dict):
+        raw = (
+            date_info.get("start_date")
+            or date_info.get("when")
+            or date_info.get("date")
+            or ""
+        )
+    else:
+        raw = str(date_info)
+
+    raw = str(raw or "").strip()
+    if not raw:
+        return "", None
+
+    # Già ISO.
+    iso_match = re.search(r"(20\d{2})-(\d{2})-(\d{2})", raw)
+    if iso_match:
+        return iso_match.group(0), None
+
+    months = {
+        "jan": "01", "january": "01",
+        "feb": "02", "february": "02",
+        "mar": "03", "march": "03",
+        "apr": "04", "april": "04",
+        "may": "05",
+        "jun": "06", "june": "06",
+        "jul": "07", "july": "07",
+        "aug": "08", "august": "08",
+        "sep": "09", "sept": "09", "september": "09",
+        "oct": "10", "october": "10",
+        "nov": "11", "november": "11",
+        "dec": "12", "december": "12",
+    }
+
+    # Esempi: "May 22", "May 22, 2026", "Fri, May 22"
+    lower = raw.lower().replace(",", " ")
+    parts = re.split(r"\s+", lower)
+
+    found_month = ""
+    found_day = ""
+    found_year = ""
+
+    for i, part in enumerate(parts):
+        cleaned = re.sub(r"[^a-z0-9]", "", part)
+        if cleaned in months:
+            found_month = months[cleaned]
+            # Cerca giorno nei token successivi
+            for candidate in parts[i + 1:i + 4]:
+                day = re.sub(r"[^0-9]", "", candidate)
+                if day and 1 <= int(day[:2]) <= 31:
+                    found_day = day[:2].zfill(2)
+                    break
+
+    for part in parts:
+        maybe_year = re.sub(r"[^0-9]", "", part)
+        if len(maybe_year) == 4 and maybe_year.startswith("20"):
+            found_year = maybe_year
+            break
+
+    if found_month and found_day:
+        return f"{found_year or year}-{found_month}-{found_day}", None
+
+    return "", None
+
+
+def get_serpapi_event_link(item):
+    link = item.get("link") or item.get("event_location_map", {}).get("link")
+    if link:
+        return link
+
+    title = item.get("title") or ""
+    address = " ".join(item.get("address") or [])
+    query = " ".join([title, address, "tickets"]).strip()
+    if query:
+        return "https://www.google.com/search?" + urlencode({"q": query})
+
+    return None
+
+
+def infer_serpapi_category(title="", description="", category=""):
+    if category:
+        return category
+
+    text = clean_text(f"{title} {description}")
+
+    if any(word in text for word in ["concert", "music", "festival", "dj", "live music", "band"]):
+        return "concert"
+
+    if any(word in text for word in ["football", "soccer", "basketball", "baseball", "rugby", "tennis", "match", "game"]):
+        return "sport"
+
+    if any(word in text for word in ["theatre", "theater", "musical", "opera", "show", "performing arts"]):
+        return "theatre"
+
+    return "culture"
+
+
+def get_serpapi_events(city="", country="", from_date="", to_date="", category="", size=40):
+    if not SERPAPI_API_KEY:
+        return []
+
+    normalized_city, country_code = normalize_request_location(city, country)
+
+    query_text = build_serpapi_query(
+        city=normalized_city,
+        country=country_code,
+        category=category,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    params = {
+        "engine": "google_events",
+        "q": query_text,
+        "api_key": SERPAPI_API_KEY,
+        "hl": "en",
+        "gl": (country_code or "US").lower(),
+    }
+
+    url = SERPAPI_API_BASE_URL + "?" + urlencode(params)
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=25) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        print("SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+        return []
+    except Exception as exc:
+        print("SerpApi error:", exc)
+        return []
+
+    raw_events = data.get("events_results", []) or []
+    events = []
+
+    for item in raw_events[:size]:
+        title = item.get("title") or "Unknown event"
+        description = item.get("description") or ""
+        date_info = item.get("date") or {}
+        start_date, start_time = parse_serpapi_date(date_info, from_date)
+
+        if not start_date:
+            continue
+
+        address_parts = item.get("address") or []
+        address_text = ", ".join([str(part) for part in address_parts if part])
+
+        venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
+        if not venue:
+            # Di solito il primo elemento address è venue o luogo.
+            venue = address_parts[0] if address_parts else ""
+
+        event_city = normalized_city
+        event_country = country_code
+
+        mapped_category = infer_serpapi_category(title, description, category)
+        subcategory = item.get("event_type") or item.get("type") or mapped_category or "event"
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": subcategory,
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": event_city,
+            "country": event_country,
+            "venue": venue or address_text,
+            "source_name": "SerpApi",
+            "source_url": get_serpapi_event_link(item),
+            "ticket_url": get_serpapi_event_link(item) or build_ticket_search_url({
+                "title": title,
+                "city": event_city,
+                "country": event_country,
+                "start_date": start_date,
+                "subcategory": subcategory,
+            }),
+            "image_url": item.get("thumbnail"),
+            "price_min": None,
+            "price_max": None,
+            "currency": None,
+            "is_vip_available": False,
+            "status": "active",
+            "serpapi_query": query_text,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event = enhance_eventbrite_fallback(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    query_text = build_serpapi_query(
+        city=normalized_city,
+        country=country_code,
+        category=category,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    safe_params = {
+        "engine": "google_events",
+        "q": query_text,
+        "api_key": "***" if SERPAPI_API_KEY else "",
+        "hl": "en",
+        "gl": (country_code or "US").lower(),
+    }
+
+    real_params = dict(safe_params)
+    if SERPAPI_API_KEY:
+        real_params["api_key"] = SERPAPI_API_KEY
+
+    safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+    real_url = SERPAPI_API_BASE_URL + "?" + urlencode(real_params)
+
+    if not SERPAPI_API_KEY:
+        return {
+            "serpapi_api_key_present": False,
+            "base_url": SERPAPI_API_BASE_URL,
+            "ok": False,
+            "error": "missing SERPAPI_API_KEY",
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "query": query_text,
+            "request_url": safe_url,
+        }
+
+    request = Request(real_url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=25) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        sample = []
+        for item in (data.get("events_results", []) or [])[:5]:
+            sample.append({
+                "title": item.get("title"),
+                "date": item.get("date"),
+                "address": item.get("address"),
+                "link": item.get("link"),
+                "thumbnail": bool(item.get("thumbnail")),
+            })
+
+        return {
+            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+            "base_url": SERPAPI_API_BASE_URL,
+            "ok": True,
+            "status_code": status_code,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "query": query_text,
+            "request_url": safe_url,
+            "events_count": len(data.get("events_results", []) or []),
+            "search_metadata_status": data.get("search_metadata", {}).get("status"),
+            "sample": sample,
+        }
+
+    except HTTPError as exc:
+        return {
+            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+            "base_url": SERPAPI_API_BASE_URL,
+            "ok": False,
+            "status_code": exc.code,
+            "error": str(exc),
+            "error_body": read_http_error_body(exc),
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "query": query_text,
+            "request_url": safe_url,
+        }
+    except Exception as exc:
+        return {
+            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+            "base_url": SERPAPI_API_BASE_URL,
+            "ok": False,
+            "error": str(exc),
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "query": query_text,
+            "request_url": safe_url,
+        }
+
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -2263,6 +2616,7 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
 
     events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
     events += get_seatgeek_events(city, country, from_date, to_date, category, size)
+    events += get_serpapi_events(city, country, from_date, to_date, category, size)
     events += get_predicthq_events(city, country, from_date, to_date, category, size)
     events += get_api_football_events(city, country, from_date, to_date, category, size)
     events += get_eventbrite_events(city, country, from_date, to_date, category, size)
@@ -2308,12 +2662,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
                     "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
                     "debug_seatgeek": "/debug-seatgeek?city=new%20york&country=US&category=concert",
+                    "debug_serpapi": "/debug-serpapi?city=tokyo&country=JP&from_date=2026-05-14&to_date=2026-07-25",
                     "debug_eventbrite": "/debug-eventbrite?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "culture_rome": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
@@ -2329,7 +2684,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -2337,11 +2692,12 @@ class Handler(BaseHTTPRequestHandler):
                 "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
                 "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
                 "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+                "serpapi_api_key_present": bool(SERPAPI_API_KEY),
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-v18-country-city-parking-fix"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v19-global-events"
             })
             return
 
@@ -2356,6 +2712,26 @@ class Handler(BaseHTTPRequestHandler):
                 country=country,
                 from_date=from_date,
                 to_date=to_date
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-serpapi":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            city, country = normalize_request_location(city, country)
+
+            payload = build_debug_serpapi_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
             )
 
             self.send_json(payload)
