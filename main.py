@@ -208,6 +208,87 @@ RECURRING_LOW_PRIORITY_TITLES = [
 ]
 
 
+LOW_QUALITY_TITLE_WORDS = [
+    "international conference",
+    "conference on",
+    "academic",
+    "science and economics",
+    "social science",
+    "humanities",
+    "proceedings",
+    "symposium",
+    "congress",
+    "seminar",
+    "webinar",
+    "round table",
+    "call for papers",
+    "icssh",
+    "ic3se",
+    "npsa",
+    "ipd",
+    "mun ",
+    "model united nations",
+    "dentistry",
+    "inclusive peace education",
+]
+
+
+PREMIUM_EXPERIENCE_WORDS = [
+    "festival",
+    "concert",
+    "live",
+    "stadium",
+    "arena",
+    "grand prix",
+    "derby",
+    "marathon",
+    "tennis",
+    "theatre",
+    "theater",
+    "musical",
+    "opera",
+    "nightlife",
+    "food",
+    "wine",
+    "design",
+    "fashion",
+    "art",
+    "exhibition",
+    "expo",
+    "show",
+    "final",
+    "world cup",
+    "champions league",
+    "serie a",
+    "premier league",
+    "la liga",
+    "nba",
+    "nfl",
+    "ufc",
+    "wwe",
+]
+
+
+PREMIUM_VENUE_WORDS = [
+    "stadium",
+    "arena",
+    "dome",
+    "olympic",
+    "olimpico",
+    "o2",
+    "wembley",
+    "madison square garden",
+    "royal albert hall",
+    "tokyo dome",
+    "foro italico",
+    "san siro",
+    "camp nou",
+    "santiago bernabeu",
+    "parc des princes",
+    "allianz arena",
+]
+
+
 def normalize_city(city):
     key = (city or "").strip().lower()
     return CITY_MAP.get(key, city.strip())
@@ -414,6 +495,149 @@ def should_drop_low_value_event(event):
                 return True
 
     return False
+
+
+def is_low_quality_conference(event):
+    title = clean_text(event.get("title"))
+    subcategory = clean_text(event.get("subcategory"))
+    category = clean_text(event.get("category"))
+    venue = clean_text(event.get("venue"))
+
+    if category != "culture":
+        return False
+
+    looks_like_conference = (
+        "conference" in subcategory
+        or "conference" in title
+        or "congress" in title
+        or "symposium" in title
+        or "seminar" in title
+    )
+
+    if not looks_like_conference:
+        return False
+
+    has_premium_signal = any(word in title for word in PREMIUM_EXPERIENCE_WORDS)
+    has_premium_venue = any(word in venue for word in PREMIUM_VENUE_WORDS)
+
+    if has_premium_signal or has_premium_venue:
+        return False
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        return True
+
+    return True
+
+
+def calculate_quality_adjustment(event):
+    title = clean_text(event.get("title"))
+    subcategory = clean_text(event.get("subcategory"))
+    category = clean_text(event.get("category"))
+    venue = clean_text(event.get("venue"))
+    source = clean_text(event.get("source_name"))
+
+    adjustment = 0
+
+    if any(word in title for word in PREMIUM_EXPERIENCE_WORDS):
+        adjustment += 12
+
+    if any(word in subcategory for word in ["concert", "festival", "sport", "tennis", "marathon", "theatre", "musical", "expo"]):
+        adjustment += 8
+
+    if any(word in venue for word in PREMIUM_VENUE_WORDS):
+        adjustment += 8
+
+    if source == "ticketmaster":
+        adjustment += 6
+
+    if source == "api-football":
+        adjustment += 8
+
+    if source == "predicthq" and category == "sport":
+        adjustment += 5
+
+    if is_low_quality_conference(event):
+        adjustment -= 28
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        adjustment -= 16
+
+    # Titoli molto lunghi e tecnici tendono a essere meno adatti a un travel engine.
+    if len(title) > 85 and category == "culture":
+        adjustment -= 6
+
+    # Eventi senza venue sono meno forti, ma non vanno eliminati.
+    if not venue:
+        adjustment -= 4
+
+    return adjustment
+
+
+def apply_quality_ranking(event):
+    base_score = event.get("ai_score") or calculate_ai_score(event)
+    adjusted = base_score + calculate_quality_adjustment(event)
+
+    category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
+
+    if category == "sport":
+        adjusted += 6
+
+    if category == "concert":
+        adjusted += 8
+
+    if category == "theatre":
+        adjusted += 6
+
+    if subcategory in ["serie a", "premier league", "la liga", "bundesliga", "ligue 1", "tennis", "marathon"]:
+        adjusted += 8
+
+    adjusted = max(35, min(99, int(adjusted)))
+
+    event["ai_score"] = adjusted
+    event["quality_score"] = adjusted
+    event["is_low_quality_conference"] = is_low_quality_conference(event)
+
+    return event
+
+
+def filter_low_quality_events(events, category=""):
+    """
+    v15: non facciamo dump API. Togliamo eventi molto deboli e limitiamo conferenze generiche.
+    """
+    output = []
+    generic_conference_count = 0
+
+    for event in events:
+        event = apply_quality_ranking(event)
+
+        event_category = clean_text(event.get("category"))
+        title = clean_text(event.get("title"))
+
+        # Quando l'utente cerca sport/concerti/teatro, sii severo.
+        if category and event_category != clean_text(category):
+            continue
+
+        # Elimina conferenze tecniche deboli, ma tienine poche se la categoria è culture o tutte.
+        if event.get("is_low_quality_conference"):
+            generic_conference_count += 1
+
+            if generic_conference_count > 3:
+                continue
+
+            if event.get("quality_score", 0) < 62:
+                continue
+
+        # Elimina titoli manifestamente poco turistici se il punteggio è basso.
+        if any(word in title for word in LOW_QUALITY_TITLE_WORDS) and event.get("quality_score", 0) < 68:
+            continue
+
+        if event.get("quality_score", 0) < 55:
+            continue
+
+        output.append(event)
+
+    return output
 
 
 def event_quality_score(event):
@@ -1525,11 +1749,14 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
     events = [event for event in events if event_matches_requested_city(event, city)]
+    events = [apply_quality_ranking(event) for event in events]
+    events = filter_low_quality_events(events, category=category)
     events = limit_recurring_events(events, max_per_title_venue=2)
 
+    # v15: prima qualità, poi data. WELOVEIT deve sembrare un prodotto curato, non un dump cronologico.
     events.sort(key=lambda event: (
+        -(event.get("quality_score") or event.get("ai_score") or 0),
         event.get("start_date") or "",
-        -(event.get("ai_score") or 0),
         event.get("title") or ""
     ))
 
@@ -1584,7 +1811,7 @@ class Handler(BaseHTTPRequestHandler):
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
                 "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
                 "eventbrite_mode": "fallback_only",
-                "version": "ticketmaster-predicthq-football-eventbrite-v14-cleanup-fallback"
+                "version": "ticketmaster-predicthq-football-eventbrite-v15-quality-ranking"
             })
             return
 
