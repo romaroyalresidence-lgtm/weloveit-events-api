@@ -157,6 +157,92 @@ JAPAN_LOCAL_SOURCE_LABELS = [
 ]
 
 
+SPORTS_EXPANSION_KEYWORDS = {
+    "boxing": {
+        "category": "sport",
+        "subcategory": "Boxing",
+        "queries": ["boxing events", "boxing fights", "boxing tickets"],
+        "official_sources": ["BoxRec", "DAZN", "Top Rank", "Matchroom Boxing", "PBC"],
+    },
+    "mma": {
+        "category": "sport",
+        "subcategory": "MMA",
+        "queries": ["mma events", "ufc events", "mma tickets"],
+        "official_sources": ["UFC", "PFL", "ONE Championship"],
+    },
+    "nfl": {
+        "category": "sport",
+        "subcategory": "NFL",
+        "queries": ["NFL games", "american football games", "NFL tickets"],
+        "official_sources": ["NFL", "Ticketmaster", "SeatGeek"],
+    },
+    "motogp": {
+        "category": "motorsport",
+        "subcategory": "MotoGP",
+        "queries": ["MotoGP Grand Prix", "MotoGP tickets", "motorcycle grand prix"],
+        "official_sources": ["MotoGP"],
+    },
+    "formula1": {
+        "category": "motorsport",
+        "subcategory": "Formula 1",
+        "queries": ["Formula 1 Grand Prix", "F1 tickets", "Formula 1 race"],
+        "official_sources": ["Formula 1"],
+    },
+    "nascar": {
+        "category": "motorsport",
+        "subcategory": "NASCAR",
+        "queries": ["NASCAR race", "NASCAR tickets"],
+        "official_sources": ["NASCAR"],
+    },
+    "rugby": {
+        "category": "sport",
+        "subcategory": "Rugby",
+        "queries": ["rugby matches", "rugby tickets"],
+        "official_sources": ["World Rugby", "Six Nations"],
+    },
+    "tennis": {
+        "category": "sport",
+        "subcategory": "Tennis",
+        "queries": ["tennis tournament", "ATP WTA tennis tickets"],
+        "official_sources": ["ATP", "WTA", "ITF"],
+    },
+    "basketball": {
+        "category": "sport",
+        "subcategory": "Basketball",
+        "queries": ["basketball games", "NBA games", "basketball tickets"],
+        "official_sources": ["NBA", "FIBA", "EuroLeague"],
+    },
+    "baseball": {
+        "category": "sport",
+        "subcategory": "Baseball",
+        "queries": ["baseball games", "MLB games", "baseball tickets"],
+        "official_sources": ["MLB", "NPB"],
+    },
+    "hockey": {
+        "category": "sport",
+        "subcategory": "Hockey",
+        "queries": ["hockey games", "NHL games", "ice hockey tickets"],
+        "official_sources": ["NHL", "IIHF"],
+    },
+}
+
+SPORTS_EXPANSION_CITY_HINTS = {
+    "new york|us": ["New York Giants", "New York Jets", "New York Knicks", "New York Rangers", "New York Yankees", "boxing Madison Square Garden"],
+    "las vegas|us": ["UFC Las Vegas", "boxing Las Vegas", "Las Vegas Raiders", "Formula 1 Las Vegas Grand Prix"],
+    "london|gb": ["NFL London Games", "boxing London", "rugby Twickenham", "Wembley Stadium sport"],
+    "paris|fr": ["UFC Paris", "rugby Paris", "Roland Garros", "Paris basketball"],
+    "rome|it": ["Six Nations Rome", "Internazionali BNL tennis", "boxing Rome"],
+    "milan|it": ["basketball Milan", "boxing Milan", "Monza Formula 1"],
+    "madrid|es": ["MotoGP Spain", "boxing Madrid", "Madrid Open tennis"],
+    "barcelona|es": ["Formula 1 Spanish Grand Prix", "MotoGP Catalunya", "basketball Barcelona"],
+    "tokyo|jp": ["sumo Tokyo", "boxing Tokyo", "NPB Tokyo", "J League Tokyo", "MotoGP Japan"],
+    "são paulo|br": ["Formula 1 São Paulo Grand Prix", "UFC Brazil", "boxing São Paulo"],
+    "buenos aires|ar": ["boxing Buenos Aires", "rugby Argentina", "tennis Buenos Aires"],
+    "toronto|ca": ["Toronto Blue Jays", "Toronto Raptors", "Toronto Maple Leafs", "UFC Toronto"],
+    "shanghai|cn": ["Formula 1 Chinese Grand Prix", "Shanghai tennis", "boxing Shanghai"],
+}
+
+
 def build_japan_local_search_url(city="", category="", from_date="", to_date=""):
     normalized_city = normalize_city(city or "Tokyo")
     category_text = SERPAPI_CATEGORY_QUERY_MAP.get(category, "events")
@@ -567,7 +653,9 @@ def source_priority(event):
         "seatgeek": 100,
         "ticketmaster": 95,
         "serpapi": 80,
+        "sports expansion": 78,
         "api-football": 75,
+        "sports official fallback": 42,
         "predicthq": 60,
         "japan local fallback": 40,
     }
@@ -866,6 +954,10 @@ def apply_quality_ranking(event):
         score += 11
     elif source == "serpapi":
         score += 8
+    elif source == "sports expansion":
+        score += 10
+    elif source == "sports official fallback":
+        score += 3
     elif source == "predicthq":
         score += 4
 
@@ -2007,6 +2099,335 @@ def call_serpapi_google_events(query_text, country_code=""):
     return data, safe_url
 
 
+def requested_sport_terms(category="", query_hint=""):
+    text = clean_text(f"{category} {query_hint}")
+    terms = []
+
+    def add(term):
+        if term not in terms:
+            terms.append(term)
+
+    if any(word in text for word in ["boxe", "boxing", "fight", "pugilato"]):
+        add("boxing")
+    if any(word in text for word in ["mma", "ufc", "combat", "one championship", "pfl"]):
+        add("mma")
+    if any(word in text for word in ["nfl", "football americano", "american football"]):
+        add("nfl")
+    if any(word in text for word in ["motogp", "moto gp", "motorcycle grand prix", "motomondiale"]):
+        add("motogp")
+    if any(word in text for word in ["formula 1", "formula1", "f1", "grand prix"]):
+        add("formula1")
+    if "nascar" in text:
+        add("nascar")
+    if "rugby" in text:
+        add("rugby")
+    if "tennis" in text:
+        add("tennis")
+    if any(word in text for word in ["basket", "basketball", "nba"]):
+        add("basketball")
+    if any(word in text for word in ["baseball", "mlb", "npb"]):
+        add("baseball")
+    if any(word in text for word in ["hockey", "nhl"]):
+        add("hockey")
+
+    if category in ["sport", "motorsport"]:
+        defaults = ["boxing", "mma", "nfl", "motogp", "formula1", "rugby", "tennis", "basketball", "baseball", "hockey"]
+        for term in defaults:
+            add(term)
+
+    return terms[:10]
+
+
+def build_sports_expansion_queries(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    date_terms = month_year_terms(from_date, to_date)
+    city_key = get_football_city_key(normalized_city, country_code)
+
+    terms = requested_sport_terms(category or "sport")
+    queries = []
+
+    def add(q):
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in queries:
+            queries.append(q)
+
+    for term in terms:
+        config = SPORTS_EXPANSION_KEYWORDS.get(term)
+        if not config:
+            continue
+
+        for base in config.get("queries", [])[:2]:
+            add(f"{base} {normalized_city} {country_name} {date_terms}")
+
+    for hint in SPORTS_EXPANSION_CITY_HINTS.get(city_key, [])[:6]:
+        add(f"{hint} {date_terms} tickets")
+
+    if category == "motorsport":
+        add(f"Formula 1 Grand Prix {country_name} {date_terms} tickets")
+        add(f"MotoGP Grand Prix {country_name} {date_terms} tickets")
+
+    return queries[:12]
+
+
+def infer_sports_expansion_type(title="", description="", venue=""):
+    text = clean_text(f"{title} {description} {venue}")
+
+    if any(word in text for word in ["boxing", "boxe", "fight", "bout"]):
+        return "sport", "Boxing"
+    if any(word in text for word in ["ufc", "mma", "pfl", "one championship"]):
+        return "sport", "MMA"
+    if any(word in text for word in ["nfl", "american football"]):
+        return "sport", "NFL"
+    if any(word in text for word in ["motogp", "moto gp", "motorcycle grand prix"]):
+        return "motorsport", "MotoGP"
+    if any(word in text for word in ["formula 1", "f1", "grand prix"]):
+        return "motorsport", "Formula 1"
+    if "nascar" in text:
+        return "motorsport", "NASCAR"
+    if "rugby" in text:
+        return "sport", "Rugby"
+    if "tennis" in text or "atp" in text or "wta" in text:
+        return "sport", "Tennis"
+    if "basketball" in text or "nba" in text:
+        return "sport", "Basketball"
+    if "baseball" in text or "mlb" in text or "npb" in text:
+        return "sport", "Baseball"
+    if "hockey" in text or "nhl" in text:
+        return "sport", "Hockey"
+
+    return "sport", "Sport"
+
+
+def build_sports_ticket_search_url(title="", city="", country="", from_date="", to_date="", subcategory=""):
+    query = " ".join([
+        str(title or ""),
+        str(subcategory or ""),
+        str(city or ""),
+        str(country or ""),
+        str(from_date or ""),
+        str(to_date or ""),
+        "official tickets schedule",
+    ]).strip()
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
+def get_sports_expansion_events(city="", country="", from_date="", to_date="", category="", size=30):
+    if not SERPAPI_API_KEY:
+        return []
+
+    if category not in ["sport", "motorsport", ""]:
+        return []
+
+    normalized_city, country_code = normalize_request_location(city, country)
+    queries = build_sports_expansion_queries(normalized_city, country_code, from_date, to_date, category or "sport")
+    events = []
+    seen = set()
+
+    for query_text in queries:
+        try:
+            data, safe_url = call_serpapi_google_events(query_text, country_code)
+        except HTTPError as exc:
+            print("Sports Expansion SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+            continue
+        except Exception as exc:
+            print("Sports Expansion SerpApi error:", exc)
+            continue
+
+        for item in (data.get("events_results", []) or []):
+            title = item.get("title") or "Unknown sports event"
+            description = item.get("description") or ""
+            start_date, start_time = parse_serpapi_date(item.get("date") or {}, from_date)
+
+            if not start_date:
+                continue
+            if from_date and start_date < from_date:
+                continue
+            if to_date and start_date > to_date:
+                continue
+
+            address_parts = item.get("address") or []
+            if country_code == "JP" and not serpapi_address_matches_city(address_parts, normalized_city, country_code):
+                title_clean = clean_text(title)
+                if not any(term in title_clean for term in ["japan", "japanese", "motogp", "grand prix"]):
+                    continue
+
+            address_text = ", ".join([str(part) for part in address_parts if part])
+            venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
+            if not venue:
+                venue = address_parts[0] if address_parts else ""
+
+            mapped_category, subcategory = infer_sports_expansion_type(title, description, venue or address_text)
+
+            raw_key = f"{normalize_event_title(title)}|{start_date}|{venue}|{subcategory}"
+            if raw_key in seen:
+                continue
+            seen.add(raw_key)
+
+            event = {
+                "title": title,
+                "category": mapped_category,
+                "subcategory": subcategory,
+                "start_date": start_date,
+                "start_time": start_time,
+                "city": normalized_city,
+                "country": country_code,
+                "venue": venue or address_text,
+                "source_name": "Sports Expansion",
+                "source_url": get_serpapi_event_link(item),
+                "ticket_url": get_serpapi_event_link(item) or build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
+                "image_url": item.get("thumbnail"),
+                "price_min": None,
+                "price_max": None,
+                "currency": None,
+                "is_vip_available": False,
+                "status": "active",
+                "sports_expansion_query": query_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            event["ai_score"] = calculate_ai_score(event)
+            if "apply_quality_ranking" in globals():
+                event = apply_quality_ranking(event)
+            events.append(event)
+
+            if len(events) >= size:
+                return events
+
+    return events
+
+
+def get_sports_official_fallback_events(city="", country="", from_date="", to_date="", category="", size=8):
+    normalized_city, country_code = normalize_request_location(city, country)
+    if category not in ["sport", "motorsport", ""]:
+        return []
+
+    terms = requested_sport_terms(category or "sport")
+    if not terms:
+        terms = ["boxing", "mma", "nfl", "motogp", "formula1"]
+
+    events = []
+    start_date = from_date or datetime.now(timezone.utc).date().isoformat()
+
+    for term in terms[:size]:
+        config = SPORTS_EXPANSION_KEYWORDS.get(term)
+        if not config:
+            continue
+
+        subcategory = config.get("subcategory", "Sport")
+        title = f"{subcategory} official schedule and ticket sources"
+        official_sources = config.get("official_sources", [])
+        source_names = " / ".join(official_sources)
+
+        event = {
+            "title": title,
+            "category": config.get("category", "sport"),
+            "subcategory": subcategory,
+            "start_date": start_date,
+            "start_time": None,
+            "city": normalized_city,
+            "country": country_code,
+            "venue": source_names or "Official sports sources",
+            "source_name": "Sports Official Fallback",
+            "source_url": build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
+            "ticket_url": build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
+            "image_url": None,
+            "price_min": None,
+            "price_max": None,
+            "currency": None,
+            "is_vip_available": False,
+            "status": "fallback",
+            "official_sources": official_sources,
+            "ai_score": 68,
+            "quality_score": 68,
+            "is_low_quality_conference": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        events.append(event)
+
+    return events
+
+
+def build_debug_sports_expansion_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    queries = build_sports_expansion_queries(normalized_city, country_code, from_date, to_date, category or "sport")
+
+    attempts = []
+    total_events = 0
+
+    if not SERPAPI_API_KEY:
+        return {
+            "serpapi_api_key_present": False,
+            "ok": False,
+            "error": "missing SERPAPI_API_KEY",
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "queries": queries,
+        }
+
+    for query_text in queries[:8]:
+        safe_params = {
+            "engine": "google_events",
+            "q": query_text,
+            "api_key": "***",
+            "hl": "en",
+            "gl": (country_code or "US").lower(),
+        }
+        safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+
+        try:
+            data, _ = call_serpapi_google_events(query_text, country_code)
+            raw_events = data.get("events_results", []) or []
+            total_events += len(raw_events)
+            sample = []
+
+            for item in raw_events[:3]:
+                sample.append({
+                    "title": item.get("title"),
+                    "date": item.get("date"),
+                    "address": item.get("address"),
+                    "link": item.get("link"),
+                    "thumbnail": bool(item.get("thumbnail")),
+                })
+
+            attempts.append({
+                "ok": True,
+                "query": query_text,
+                "request_url": safe_url,
+                "events_count": len(raw_events),
+                "sample": sample,
+            })
+        except HTTPError as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "status_code": exc.code,
+                "error": str(exc),
+                "error_body": read_http_error_body(exc),
+            })
+        except Exception as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "error": str(exc),
+            })
+
+    return {
+        "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "sports_expansion": True,
+        "ok": any(item.get("ok") for item in attempts),
+        "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+        "normalized": {"city": normalized_city, "country_code": country_code},
+        "queries": queries,
+        "total_events_count": total_events,
+        "attempts": attempts,
+    }
+
+
 def get_serpapi_events(city="", country="", from_date="", to_date="", category="", size=40):
     if not SERPAPI_API_KEY:
         return []
@@ -2867,6 +3288,7 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
     events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
     events += get_seatgeek_events(city, country, from_date, to_date, category, size)
     events += get_serpapi_events(city, country, from_date, to_date, category, size)
+    events += get_sports_expansion_events(city, country, from_date, to_date, category, size)
     events += get_predicthq_events(city, country, from_date, to_date, category, size)
     events += get_api_football_events(city, country, from_date, to_date, category, size)
     events += get_eventbrite_events(city, country, from_date, to_date, category, size)
@@ -2881,6 +3303,9 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
 
     if normalize_country_code(country) == "JP" and len(events) < 8:
         events += get_japan_local_fallback_events(city, country, from_date, to_date, category)
+
+    if category in ["sport", "motorsport"] and len(events) < 8:
+        events += get_sports_official_fallback_events(city, country, from_date, to_date, category)
 
     # v15: prima qualità, poi data. WELOVEIT deve sembrare un prodotto curato, non un dump cronologico.
     events.sort(key=lambda event: (
@@ -2915,13 +3340,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
                     "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
                     "debug_seatgeek": "/debug-seatgeek?city=new%20york&country=US&category=concert",
                     "debug_serpapi": "/debug-serpapi?city=tokyo&country=JP&from_date=2026-05-14&to_date=2026-07-25",
+                    "debug_sports": "/debug-sports?city=london&country=GB&category=sport&from_date=2026-01-01&to_date=2026-12-31",
                     "debug_eventbrite": "/debug-eventbrite?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "culture_rome": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
@@ -2937,7 +3363,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -2951,11 +3377,13 @@ class Handler(BaseHTTPRequestHandler):
                 "serpapi_location_filter": True,
                 "advanced_source_priority": True,
                 "serpapi_category_cleanup": True,
+                "sports_expansion_engine": True,
+                "sports_official_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v22-category-cleanup"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v23-sports-expansion"
             })
             return
 
@@ -2970,6 +3398,26 @@ class Handler(BaseHTTPRequestHandler):
                 country=country,
                 from_date=from_date,
                 to_date=to_date
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-sports":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", ["sport"])[0]
+
+            city, country = normalize_request_location(city, country)
+
+            payload = build_debug_sports_expansion_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
             )
 
             self.send_json(payload)
