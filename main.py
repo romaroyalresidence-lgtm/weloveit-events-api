@@ -17,6 +17,9 @@ PREDICT_API_URL = os.environ.get("PREDICT_API_URL", "https://api.predicthq.com/v
 FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY")
 FOOTBALL_API_BASE_URL = "https://v3.football.api-sports.io"
 
+EVENTBRITE_API_KEY = os.environ.get("EVENTBRITE_API_KEY")
+EVENTBRITE_API_BASE_URL = "https://www.eventbriteapi.com/v3"
+
 
 CITY_MAP = {
     "roma": "Rome",
@@ -47,6 +50,16 @@ PREDICTHQ_CATEGORY_MAP = {
     "horse_racing": "sports",
     "theatre": "performing-arts",
     "culture": "performing-arts,community,festivals,expos,conferences",
+}
+
+
+EVENTBRITE_CATEGORY_MAP = {
+    "concert": "103",
+    "theatre": "105",
+    "sport": "108",
+    "motorsport": "108",
+    "horse_racing": "108",
+    "culture": "",
 }
 
 
@@ -256,6 +269,9 @@ def normalize_category(segment):
     if "film" in s or "community" in s or "expo" in s or "conference" in s:
         return "culture"
 
+    if "business" in s or "food" in s or "drink" in s or "nightlife" in s:
+        return "culture"
+
     return "event"
 
 
@@ -401,6 +417,9 @@ def event_quality_score(event):
 
     if source == "ticketmaster":
         score += 8
+
+    if source == "eventbrite":
+        score += 6
 
     if source == "api-football":
         score += 7
@@ -557,8 +576,6 @@ def infer_sport_venue(title, city="", venue=""):
     city_clean = clean_text(city)
     venue_clean = clean_text(venue)
 
-    # v11: prima controlliamo Marathon/Tennis, poi calcio.
-    # Così Rome Marathon non finisce più allo Stadio Olimpico.
     if "marathon" in title_clean or "half marathon" in title_clean:
         return "Rome city center" if city_clean in ["roma", "rome"] else (venue or "City center")
 
@@ -689,6 +706,10 @@ def calculate_ai_score(event):
         "internazionali bnl",
         "marathon",
         "wwe",
+        "startup",
+        "networking",
+        "conference",
+        "festival",
     ]
 
     iconic_venues = [
@@ -724,6 +745,11 @@ def calculate_ai_score(event):
         "motorsport",
         "wrestling",
         "marathon",
+        "conference",
+        "business",
+        "nightlife",
+        "food & drink",
+        "festival",
     ]
 
     premium_word_bonus = 0
@@ -743,10 +769,13 @@ def calculate_ai_score(event):
             score += 8
             break
 
-    if category in ["sport", "motorsport", "horse_racing", "concert", "theatre"]:
+    if category in ["sport", "motorsport", "horse_racing", "concert", "theatre", "culture"]:
         score += 4
 
     if source_name == "ticketmaster":
+        score += 5
+
+    if source_name == "eventbrite":
         score += 5
 
     if source_name == "api-football":
@@ -1033,6 +1062,151 @@ def get_predicthq_events(city="", country="", from_date="", to_date="", category
 
         event = enhance_predicthq_event(event)
         event["ticket_url"] = build_ticket_search_url(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def map_eventbrite_category(category_name="", subcategory_name=""):
+    text = clean_text(f"{category_name} {subcategory_name}")
+
+    if "music" in text or "concert" in text:
+        return "concert"
+
+    if "sports" in text or "fitness" in text or "football" in text or "soccer" in text:
+        return "sport"
+
+    if "performing" in text or "visual" in text or "arts" in text or "theatre" in text or "theater" in text:
+        return "theatre"
+
+    return "culture"
+
+
+def get_eventbrite_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not EVENTBRITE_API_KEY:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+
+    location_address = normalized_city
+    if country_code:
+        location_address = f"{normalized_city}, {country_code}"
+
+    params = {
+        "location.address": location_address,
+        "location.within": "50km",
+        "expand": "venue,logo,category,subcategory",
+        "sort_by": "date",
+        "page_size": min(size, 50),
+    }
+
+    if from_date:
+        params["start_date.range_start"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        params["start_date.range_end"] = f"{to_date}T23:59:59Z"
+
+    eventbrite_category_id = EVENTBRITE_CATEGORY_MAP.get(category)
+    if eventbrite_category_id:
+        params["categories"] = eventbrite_category_id
+
+    if category == "culture":
+        params["q"] = "business food nightlife workshop festival community"
+
+    url = EVENTBRITE_API_BASE_URL.rstrip("/") + "/events/search/?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {EVENTBRITE_API_KEY}",
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("Eventbrite error:", exc)
+        return []
+
+    raw_events = data.get("events", [])
+    events = []
+
+    for item in raw_events:
+        title = item.get("name", {}).get("text") or "Unknown event"
+
+        start = item.get("start", {})
+        start_local = start.get("local") or start.get("utc") or ""
+        start_date = start_local[:10] if start_local else ""
+        start_time = start_local[11:19] if len(start_local) >= 19 else None
+
+        if not start_date:
+            continue
+
+        if from_date and start_date < from_date:
+            continue
+
+        if to_date and start_date > to_date:
+            continue
+
+        venue_data = item.get("venue") or {}
+        city_name = venue_data.get("address", {}).get("city") or normalized_city
+        country_name = venue_data.get("address", {}).get("country") or country_code
+        venue_name = venue_data.get("name") or ""
+
+        if city and city_name:
+            if not event_matches_requested_city({"city": city_name}, city):
+                continue
+
+        if country_code and country_name:
+            if clean_text(country_name) not in [clean_text(country_code), clean_text(country)]:
+                if len(country_name) == 2 and clean_text(country_name) != clean_text(country_code):
+                    continue
+
+        category_name = (item.get("category") or {}).get("name") or ""
+        subcategory_name = (item.get("subcategory") or {}).get("name") or ""
+        mapped_category = map_eventbrite_category(category_name, subcategory_name)
+
+        if category and mapped_category != category:
+            if category == "culture" and mapped_category in ["culture", "theatre", "concert"]:
+                pass
+            else:
+                continue
+
+        logo = item.get("logo") or {}
+        image_url = logo.get("url") or logo.get("original", {}).get("url")
+
+        is_free = item.get("is_free")
+        price_min = 0 if is_free is True else None
+        currency = None
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": subcategory_name or category_name or "Local event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "Eventbrite",
+            "source_url": item.get("url"),
+            "ticket_url": item.get("url"),
+            "image_url": image_url,
+            "price_min": price_min,
+            "price_max": None,
+            "currency": currency,
+            "is_vip_available": False,
+            "status": item.get("status", "active"),
+            "is_free": is_free,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
         event["ai_score"] = calculate_ai_score(event)
         events.append(event)
 
@@ -1482,7 +1656,16 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
         size=size
     )
 
-    events = ticketmaster_events + predicthq_events + football_events
+    eventbrite_events = get_eventbrite_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        size=size
+    )
+
+    events = ticketmaster_events + predicthq_events + football_events + eventbrite_events
     events = dedupe_events(events)
     events = [event for event in events if event_is_in_range(event, from_date, to_date)]
     events = [event for event in events if event_matches_requested_city(event, city)]
@@ -1519,11 +1702,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ + API-Football",
+                "provider": "Ticketmaster + PredictHQ + API-Football + Eventbrite",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
                     "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
+                    "eventbrite_test": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
                     "sport_london": "/events?city=london&country=GB&category=sport",
                     "sport_rome": "/events?city=rome&country=IT&category=sport",
                     "concert": "/events?city=new%20york&country=US&category=concert"
@@ -1535,12 +1719,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + PredictHQ + API-Football",
+                "provider": "Ticketmaster + PredictHQ + API-Football + Eventbrite",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
                 "football_api_key_present": bool(FOOTBALL_API_KEY),
-                "version": "ticketmaster-predicthq-football-v11-score-venue-fix"
+                "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
+                "version": "ticketmaster-predicthq-football-eventbrite-v12"
             })
             return
 
