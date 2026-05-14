@@ -148,6 +148,22 @@ SERPAPI_CATEGORY_QUERY_MAP = {
 }
 
 
+JAPAN_LOCAL_SOURCE_LABELS = [
+    "Ticket Pia",
+    "Lawson Ticket",
+    "eplus",
+    "J.League",
+    "NPB",
+]
+
+
+def build_japan_local_search_url(city="", category="", from_date="", to_date=""):
+    normalized_city = normalize_city(city or "Tokyo")
+    category_text = SERPAPI_CATEGORY_QUERY_MAP.get(category, "events")
+    query = f"{normalized_city} Japan {category_text} {from_date} {to_date} official tickets Pia Lawson eplus".strip()
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
 SEATGEEK_CITY_GEO = {
     "new york|us": "40.7128,-74.0060",
     "los angeles|us": "34.0522,-118.2437",
@@ -1661,28 +1677,78 @@ def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", 
 
 
 
+def month_year_terms(from_date="", to_date=""):
+    months = [
+        "", "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ]
+
+    terms = []
+
+    for value in [from_date, to_date]:
+        try:
+            year = int(value[:4])
+            month = int(value[5:7])
+            if 1 <= month <= 12:
+                label = f"{months[month]} {year}"
+                if label not in terms:
+                    terms.append(label)
+        except Exception:
+            pass
+
+    if from_date and to_date and from_date[:4] == to_date[:4]:
+        year = from_date[:4]
+        if year not in terms:
+            terms.append(year)
+
+    return " ".join(terms)
+
+
 def build_serpapi_query(city="", country="", category="", from_date="", to_date=""):
     normalized_city, country_code = normalize_request_location(city, country)
     country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
     category_terms = SERPAPI_CATEGORY_QUERY_MAP.get(category, SERPAPI_CATEGORY_QUERY_MAP.get("", "events"))
-
-    date_terms = ""
-    if from_date and to_date:
-        date_terms = f"from {from_date} to {to_date}"
-    elif from_date:
-        date_terms = f"after {from_date}"
-    elif to_date:
-        date_terms = f"before {to_date}"
+    date_terms = month_year_terms(from_date, to_date)
 
     parts = [
         category_terms,
-        "in",
         normalized_city,
         country_name,
         date_terms,
     ]
 
     return " ".join([str(part).strip() for part in parts if str(part).strip()])
+
+
+def build_serpapi_query_variants(city="", country="", category="", from_date="", to_date=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    date_terms = month_year_terms(from_date, to_date)
+
+    base_category = SERPAPI_CATEGORY_QUERY_MAP.get(category, "events")
+    variants = []
+
+    def add(q):
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in variants:
+            variants.append(q)
+
+    # Google Events spesso restituisce zero se mettiamo "from YYYY-MM-DD to YYYY-MM-DD".
+    # v20 usa query più naturali e riprova più varianti.
+    add(f"{base_category} {normalized_city} {country_name} {date_terms}")
+    add(f"events {normalized_city} {country_name} {date_terms}")
+
+    if not category:
+        add(f"concerts festivals {normalized_city} {country_name} {date_terms}")
+        add(f"sports events {normalized_city} {country_name} {date_terms}")
+        add(f"exhibitions shows {normalized_city} {country_name} {date_terms}")
+
+    if country_code == "JP":
+        add(f"Tokyo events Japan {date_terms} official tickets")
+        add(f"Tokyo concerts festivals Japan {date_terms}")
+        add(f"Tokyo sports events Japan {date_terms}")
+
+    return variants[:5]
 
 
 def parse_serpapi_date(date_info, fallback_from_date=""):
@@ -1798,20 +1864,7 @@ def infer_serpapi_category(title="", description="", category=""):
     return "culture"
 
 
-def get_serpapi_events(city="", country="", from_date="", to_date="", category="", size=40):
-    if not SERPAPI_API_KEY:
-        return []
-
-    normalized_city, country_code = normalize_request_location(city, country)
-
-    query_text = build_serpapi_query(
-        city=normalized_city,
-        country=country_code,
-        category=category,
-        from_date=from_date,
-        to_date=to_date,
-    )
-
+def call_serpapi_google_events(query_text, country_code=""):
     params = {
         "engine": "google_events",
         "q": query_text,
@@ -1821,83 +1874,24 @@ def get_serpapi_events(city="", country="", from_date="", to_date="", category="
     }
 
     url = SERPAPI_API_BASE_URL + "?" + urlencode(params)
+    safe_params = dict(params)
+    safe_params["api_key"] = "***"
+    safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+
     request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
 
-    try:
-        with urlopen(request, timeout=25) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        print("SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+    with urlopen(request, timeout=25) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    return data, safe_url
+
+
+def get_serpapi_events(city="", country="", from_date="", to_date="", category="", size=40):
+    if not SERPAPI_API_KEY:
         return []
-    except Exception as exc:
-        print("SerpApi error:", exc)
-        return []
 
-    raw_events = data.get("events_results", []) or []
-    events = []
-
-    for item in raw_events[:size]:
-        title = item.get("title") or "Unknown event"
-        description = item.get("description") or ""
-        date_info = item.get("date") or {}
-        start_date, start_time = parse_serpapi_date(date_info, from_date)
-
-        if not start_date:
-            continue
-
-        address_parts = item.get("address") or []
-        address_text = ", ".join([str(part) for part in address_parts if part])
-
-        venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
-        if not venue:
-            # Di solito il primo elemento address è venue o luogo.
-            venue = address_parts[0] if address_parts else ""
-
-        event_city = normalized_city
-        event_country = country_code
-
-        mapped_category = infer_serpapi_category(title, description, category)
-        subcategory = item.get("event_type") or item.get("type") or mapped_category or "event"
-
-        event = {
-            "title": title,
-            "category": mapped_category,
-            "subcategory": subcategory,
-            "start_date": start_date,
-            "start_time": start_time,
-            "city": event_city,
-            "country": event_country,
-            "venue": venue or address_text,
-            "source_name": "SerpApi",
-            "source_url": get_serpapi_event_link(item),
-            "ticket_url": get_serpapi_event_link(item) or build_ticket_search_url({
-                "title": title,
-                "city": event_city,
-                "country": event_country,
-                "start_date": start_date,
-                "subcategory": subcategory,
-            }),
-            "image_url": item.get("thumbnail"),
-            "price_min": None,
-            "price_max": None,
-            "currency": None,
-            "is_vip_available": False,
-            "status": "active",
-            "serpapi_query": query_text,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        event = enhance_eventbrite_fallback(event)
-        event["ai_score"] = calculate_ai_score(event)
-        events.append(event)
-
-    return events
-
-
-def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", category=""):
     normalized_city, country_code = normalize_request_location(city, country)
-    query_text = build_serpapi_query(
+    query_variants = build_serpapi_query_variants(
         city=normalized_city,
         country=country_code,
         category=category,
@@ -1905,20 +1899,98 @@ def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", c
         to_date=to_date,
     )
 
-    safe_params = {
-        "engine": "google_events",
-        "q": query_text,
-        "api_key": "***" if SERPAPI_API_KEY else "",
-        "hl": "en",
-        "gl": (country_code or "US").lower(),
-    }
+    events = []
+    seen_raw = set()
 
-    real_params = dict(safe_params)
-    if SERPAPI_API_KEY:
-        real_params["api_key"] = SERPAPI_API_KEY
+    for query_text in query_variants:
+        try:
+            data, safe_url = call_serpapi_google_events(query_text, country_code)
+        except HTTPError as exc:
+            print("SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+            continue
+        except Exception as exc:
+            print("SerpApi error:", exc)
+            continue
 
-    safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
-    real_url = SERPAPI_API_BASE_URL + "?" + urlencode(real_params)
+        raw_events = data.get("events_results", []) or []
+
+        for item in raw_events:
+            title = item.get("title") or "Unknown event"
+            raw_key = f"{title}|{item.get('date')}|{item.get('address')}"
+            if raw_key in seen_raw:
+                continue
+            seen_raw.add(raw_key)
+
+            description = item.get("description") or ""
+            date_info = item.get("date") or {}
+            start_date, start_time = parse_serpapi_date(date_info, from_date)
+
+            if not start_date:
+                continue
+
+            if from_date and start_date < from_date:
+                continue
+            if to_date and start_date > to_date:
+                continue
+
+            address_parts = item.get("address") or []
+            address_text = ", ".join([str(part) for part in address_parts if part])
+
+            venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
+            if not venue:
+                venue = address_parts[0] if address_parts else ""
+
+            mapped_category = infer_serpapi_category(title, description, category)
+            subcategory = item.get("event_type") or item.get("type") or mapped_category or "event"
+
+            event = {
+                "title": title,
+                "category": mapped_category,
+                "subcategory": subcategory,
+                "start_date": start_date,
+                "start_time": start_time,
+                "city": normalized_city,
+                "country": country_code,
+                "venue": venue or address_text,
+                "source_name": "SerpApi",
+                "source_url": get_serpapi_event_link(item),
+                "ticket_url": get_serpapi_event_link(item) or build_ticket_search_url({
+                    "title": title,
+                    "city": normalized_city,
+                    "country": country_code,
+                    "start_date": start_date,
+                    "subcategory": subcategory,
+                }),
+                "image_url": item.get("thumbnail"),
+                "price_min": None,
+                "price_max": None,
+                "currency": None,
+                "is_vip_available": False,
+                "status": "active",
+                "serpapi_query": query_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            event = enhance_eventbrite_fallback(event)
+            event["ai_score"] = calculate_ai_score(event)
+            events.append(event)
+
+            if len(events) >= size:
+                return events
+
+    return events
+
+
+def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    query_variants = build_serpapi_query_variants(
+        city=normalized_city,
+        country=country_code,
+        category=category,
+        from_date=from_date,
+        to_date=to_date,
+    )
 
     if not SERPAPI_API_KEY:
         return {
@@ -1928,66 +2000,73 @@ def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", c
             "error": "missing SERPAPI_API_KEY",
             "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
             "normalized": {"city": normalized_city, "country_code": country_code},
-            "query": query_text,
-            "request_url": safe_url,
+            "query_variants": query_variants,
         }
 
-    request = Request(real_url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+    attempts = []
+    total_events = 0
 
-    try:
-        with urlopen(request, timeout=25) as response:
-            status_code = response.status
-            data = json.loads(response.read().decode("utf-8"))
+    for query_text in query_variants:
+        safe_params = {
+            "engine": "google_events",
+            "q": query_text,
+            "api_key": "***",
+            "hl": "en",
+            "gl": (country_code or "US").lower(),
+        }
+        safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
 
-        sample = []
-        for item in (data.get("events_results", []) or [])[:5]:
-            sample.append({
-                "title": item.get("title"),
-                "date": item.get("date"),
-                "address": item.get("address"),
-                "link": item.get("link"),
-                "thumbnail": bool(item.get("thumbnail")),
+        try:
+            data, _ = call_serpapi_google_events(query_text, country_code)
+            raw_events = data.get("events_results", []) or []
+            total_events += len(raw_events)
+
+            sample = []
+            for item in raw_events[:3]:
+                sample.append({
+                    "title": item.get("title"),
+                    "date": item.get("date"),
+                    "address": item.get("address"),
+                    "link": item.get("link"),
+                    "thumbnail": bool(item.get("thumbnail")),
+                })
+
+            attempts.append({
+                "ok": True,
+                "query": query_text,
+                "request_url": safe_url,
+                "events_count": len(raw_events),
+                "search_metadata_status": data.get("search_metadata", {}).get("status"),
+                "sample": sample,
             })
 
-        return {
-            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
-            "base_url": SERPAPI_API_BASE_URL,
-            "ok": True,
-            "status_code": status_code,
-            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
-            "normalized": {"city": normalized_city, "country_code": country_code},
-            "query": query_text,
-            "request_url": safe_url,
-            "events_count": len(data.get("events_results", []) or []),
-            "search_metadata_status": data.get("search_metadata", {}).get("status"),
-            "sample": sample,
-        }
+        except HTTPError as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "status_code": exc.code,
+                "error": str(exc),
+                "error_body": read_http_error_body(exc),
+            })
+        except Exception as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "error": str(exc),
+            })
 
-    except HTTPError as exc:
-        return {
-            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
-            "base_url": SERPAPI_API_BASE_URL,
-            "ok": False,
-            "status_code": exc.code,
-            "error": str(exc),
-            "error_body": read_http_error_body(exc),
-            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
-            "normalized": {"city": normalized_city, "country_code": country_code},
-            "query": query_text,
-            "request_url": safe_url,
-        }
-    except Exception as exc:
-        return {
-            "serpapi_api_key_present": bool(SERPAPI_API_KEY),
-            "base_url": SERPAPI_API_BASE_URL,
-            "ok": False,
-            "error": str(exc),
-            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
-            "normalized": {"city": normalized_city, "country_code": country_code},
-            "query": query_text,
-            "request_url": safe_url,
-        }
-
+    return {
+        "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "base_url": SERPAPI_API_BASE_URL,
+        "ok": any(item.get("ok") for item in attempts),
+        "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+        "normalized": {"city": normalized_city, "country_code": country_code},
+        "query_variants": query_variants,
+        "total_events_count": total_events,
+        "attempts": attempts,
+    }
 
 
 def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
@@ -2610,6 +2689,50 @@ def build_debug_football_payload(city="", country="", from_date="", to_date=""):
     }
 
 
+def get_japan_local_fallback_events(city="", country="", from_date="", to_date="", category="", size=5):
+    normalized_city, country_code = normalize_request_location(city, country)
+
+    if country_code != "JP":
+        return []
+
+    title_map = {
+        "concert": "Japan local concert ticket sources",
+        "sport": "Japan local sports ticket sources",
+        "theatre": "Japan local theatre and live show sources",
+        "culture": "Japan local events and exhibitions sources",
+        "": "Japan local event ticket sources",
+    }
+
+    title = title_map.get(category, title_map[""])
+    event = {
+        "title": title,
+        "category": category or "culture",
+        "subcategory": "Local ticket sources",
+        "start_date": from_date or datetime.now(timezone.utc).date().isoformat(),
+        "start_time": None,
+        "city": normalized_city,
+        "country": country_code,
+        "venue": "Ticket Pia / Lawson Ticket / eplus / J.League / NPB",
+        "source_name": "Japan Local Fallback",
+        "source_url": build_japan_local_search_url(normalized_city, category, from_date, to_date),
+        "ticket_url": build_japan_local_search_url(normalized_city, category, from_date, to_date),
+        "image_url": None,
+        "price_min": None,
+        "price_max": None,
+        "currency": "JPY",
+        "is_vip_available": False,
+        "status": "fallback",
+        "local_sources": JAPAN_LOCAL_SOURCE_LABELS,
+        "ai_score": 70,
+        "quality_score": 70,
+        "is_low_quality_conference": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    return [event]
+
+
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
     city, country = normalize_request_location(city, country)
     events = []
@@ -2628,6 +2751,9 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
     events = [apply_quality_ranking(event) for event in events]
     events = filter_low_quality_events(events, category=category)
     events = limit_recurring_events(events, max_per_title_venue=2)
+
+    if normalize_country_code(country) == "JP" and len(events) < 8:
+        events += get_japan_local_fallback_events(city, country, from_date, to_date, category)
 
     # v15: prima qualità, poi data. WELOVEIT deve sembrare un prodotto curato, non un dump cronologico.
     events.sort(key=lambda event: (
@@ -2662,7 +2788,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
@@ -2684,7 +2810,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -2693,11 +2819,13 @@ class Handler(BaseHTTPRequestHandler):
                 "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
                 "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
                 "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+                "serpapi_query_expansion": True,
+                "japan_local_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v19-global-events"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v20-query-expansion"
             })
             return
 
