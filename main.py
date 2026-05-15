@@ -745,6 +745,10 @@ def normalize_event_title(title):
         "standard ticket",
         "skip the line",
         "skip-the-line",
+        "fanzone",
+        "fan zone",
+        "watch party",
+        "viewing party",
         "entry ticket",
         "entrance ticket",
         "admission ticket",
@@ -761,6 +765,12 @@ def normalize_event_title(title):
         "day one",
         "day two",
         "day three",
+        "venue premium tickets",
+        "premium tickets",
+        "tba vs tba",
+        "date tbc",
+        "men women s doubleheader",
+        "men women doubleheader",
     ]
 
     for word in remove_words:
@@ -955,9 +965,9 @@ def apply_quality_ranking(event):
     elif source == "serpapi":
         score += 8
     elif source == "sports expansion":
-        score += 10
-    elif source == "sports official fallback":
         score += 3
+    elif source == "sports official fallback":
+        score += 1
     elif source == "predicthq":
         score += 4
 
@@ -1107,6 +1117,12 @@ def event_quality_score(event):
     if source == "predicthq":
         score += 2
 
+    if source == "sports expansion":
+        score -= 6
+
+    if source == "sports official fallback":
+        score -= 15
+
     if event.get("eventbrite_search_url"):
         score += 2
 
@@ -1129,7 +1145,7 @@ def dedupe_events(events):
         title = event.get("title")
         venue = clean_text(event.get("venue"))
         city = clean_text(event.get("city"))
-        country = clean_text(event.get("country"))
+        country = clean_text(normalize_country_code(event.get("country")))
         start_date = clean_text(event.get("start_date"))
 
         duplicate = False
@@ -1137,7 +1153,7 @@ def dedupe_events(events):
         for existing in unique:
             same_date = clean_text(existing.get("start_date")) == start_date
             same_city = clean_text(existing.get("city")) == city
-            same_country = clean_text(existing.get("country")) == country
+            same_country = clean_text(normalize_country_code(existing.get("country"))) == country
             same_venue = clean_text(existing.get("venue")) == venue
             title_similar = similar_text(title, existing.get("title"))
 
@@ -1173,14 +1189,23 @@ def limit_recurring_events(events, max_per_title_venue=2):
         key = f"{title_key}|{venue_key}|{city_key}"
 
         is_recurring_candidate = (
-            category in ["culture", "theatre", "concert"]
-            and source in ["predicthq", "ticketmaster", "seatgeek"]
-            and (
-                any(t in title_key for t in RECURRING_LOW_PRIORITY_TITLES)
-                or "day two" in clean_text(event.get("title"))
-                or "day three" in clean_text(event.get("title"))
-                or "spring pass" in clean_text(event.get("title"))
-                or "weekly" in title_key
+            (
+                category in ["culture", "theatre", "concert"]
+                and source in ["predicthq", "ticketmaster"]
+                and (
+                    any(t in title_key for t in RECURRING_LOW_PRIORITY_TITLES)
+                    or "day two" in clean_text(event.get("title"))
+                    or "day three" in clean_text(event.get("title"))
+                    or "spring pass" in clean_text(event.get("title"))
+                )
+            )
+            or (
+                category == "sport"
+                and (
+                    "valorant masters" in title_key
+                    or "world sevens football" in title_key
+                    or "fanzone" in title_key
+                )
             )
         )
 
@@ -2198,28 +2223,34 @@ def build_sports_expansion_queries(city="", country="", from_date="", to_date=""
 def infer_sports_expansion_type(title="", description="", venue=""):
     text = clean_text(f"{title} {description} {venue}")
 
-    if any(word in text for word in ["boxing", "boxe", "fight", "bout"]):
+    if any(word in text for word in ["boxing", "boxe", "fight night", "championship boxing", "box cup"]):
         return "sport", "Boxing"
-    if any(word in text for word in ["ufc", "mma", "pfl", "one championship"]):
+    if any(word in text for word in ["ufc", "mma", "pfl", "one championship", "ultra-mma"]):
         return "sport", "MMA"
-    if any(word in text for word in ["nfl", "american football"]):
+    if any(word in text for word in ["nfl", "american football", "international series"]):
         return "sport", "NFL"
+    if any(word in text for word in ["rugby", "twickenham", "premiership", "barbarians", "challenge cup", "nations championship"]):
+        return "sport", "Rugby"
+    if any(word in text for word in ["fa cup", "efl", "play-off final", "play off final", "football", "chelsea", "manchester city"]):
+        return "sport", "Football"
     if any(word in text for word in ["motogp", "moto gp", "motorcycle grand prix"]):
         return "motorsport", "MotoGP"
     if any(word in text for word in ["formula 1", "f1", "grand prix"]):
         return "motorsport", "Formula 1"
     if "nascar" in text:
         return "motorsport", "NASCAR"
-    if "rugby" in text:
-        return "sport", "Rugby"
     if "tennis" in text or "atp" in text or "wta" in text:
         return "sport", "Tennis"
     if "basketball" in text or "nba" in text:
         return "sport", "Basketball"
+    if "netball" in text:
+        return "sport", "Netball"
     if "baseball" in text or "mlb" in text or "npb" in text:
         return "sport", "Baseball"
     if "hockey" in text or "nhl" in text:
         return "sport", "Hockey"
+    if "wwe" in text or "wrestling" in text:
+        return "sport", "Wrestling"
 
     return "sport", "Sport"
 
@@ -2271,7 +2302,29 @@ def sports_result_is_relevant(item, query_text="", subcategory=""):
     query = clean_text(query_text)
     text = f"{title} {description} {link} {query} {clean_text(subcategory)}"
 
-    bad_domains = ["open.spotify.com", "spotify.com", "dice.fm"]
+    # v26: domini musicali/non sportivi bloccati prima delle parole sportive.
+    bad_domains = [
+        "open.spotify.com",
+        "spotify.com",
+        "dice.fm",
+        "gigtotem.com/listings",
+    ]
+    if any(domain in link for domain in bad_domains):
+        return False
+
+    bad_link_words = ["harry-styles", "/concert/", "concert/", "album", "tour"]
+    if any(word in link for word in bad_link_words):
+        strong_sport_title_words = [
+            "boxing", "fight night", "rugby", "nfl", "fa cup", "play-off",
+            "premiership", "championship", "wwe", "ufc", "grand prix",
+            "challenge cup", "barbarians",
+        ]
+        if not any(word in title for word in strong_sport_title_words):
+            return False
+
+    fan_zone_words = ["fanzone", "fan zone", "watch party", "viewing party"]
+    if any(word in title for word in fan_zone_words):
+        return False
 
     sport_words = [
         "boxing", "boxe", "fight", "championship boxing", "box cup",
@@ -2279,18 +2332,16 @@ def sports_result_is_relevant(item, query_text="", subcategory=""):
         "nfl", "american football", "football team", "international series",
         "rugby", "premiership rugby", "nations championship", "twickenham",
         "tennis", "atp", "wta", "grand slam",
-        "basketball", "nba",
+        "basketball", "nba", "netball",
         "baseball", "mlb", "npb",
         "hockey", "nhl",
         "formula 1", "f1", "grand prix", "motogp", "nascar",
-        "fa cup", "play-off final", "stadium",
+        "fa cup", "play-off final", "stadium", "wwe", "wrestling",
+        "barbarians", "challenge cup",
     ]
 
     if any(word in text for word in sport_words):
         return True
-
-    if any(domain in link for domain in bad_domains):
-        return False
 
     music_like_words = ["concert", "tour", "album", "spotify", "band", "dj", "singer"]
     if any(word in title for word in music_like_words):
@@ -3449,7 +3500,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v25 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v26 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
@@ -3472,7 +3523,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v25 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v26 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -3490,12 +3541,14 @@ class Handler(BaseHTTPRequestHandler):
                 "sports_query_fix": True,
                 "sports_location_filter": True,
                 "sports_relevance_filter": True,
+                "sports_dedupe_fix": True,
+                "sports_false_positive_filter": True,
                 "sports_official_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v25-sports-cleanup"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v26-sports-dedupe-score"
             })
             return
 
