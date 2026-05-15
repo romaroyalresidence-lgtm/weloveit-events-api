@@ -1,1217 +1,4011 @@
+import os
+import re
+import json
+from difflib import SequenceMatcher
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlencode, urlparse, parse_qs, quote_plus
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-  {
-    "title": "BIG SUMMER KICK OFF: Harlequins v Exeter Chiefs",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-05-16",
-    "start_time": "16:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/harlequins/EDP/Event/Index/2163?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Harlequins-chl:Shell-Event-v.BSKO",
-    "ticket_url": "https://www.eticketing.co.uk/harlequins/EDP/Event/Index/2163?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Harlequins-chl:Shell-Event-v.BSKO",
-    "image_url": "https://s1.ticketm.net/dam/a/641/088b4206-c5e3-4c8c-aa24-4f725645e641_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287367+00:00",
-    "updated_at": "2026-05-15T13:27:50.287372+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "SLB - SUPER LEAGUE BASKETBALL Playoff Finals 2026",
-    "category": "sport",
-    "subcategory": "Men Professional",
-    "start_date": "2026-05-17",
-    "start_time": "13:15:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "The O2",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/slb-super-league-basketball-playoff-finals-london-17-05-2026/event/350062CA903114DE",
-    "ticket_url": "https://www.ticketmaster.co.uk/slb-super-league-basketball-playoff-finals-london-17-05-2026/event/350062CA903114DE",
-    "image_url": "https://s1.ticketm.net/dam/a/9e3/4459fa1b-90e3-4955-86fc-8c26451c99e3_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287438+00:00",
-    "updated_at": "2026-05-15T13:27:50.287443+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "A Night of Professional Championship Boxing - Mayhem In London",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-23",
-    "start_time": "18:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "York Hall",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/a-night-of-professional-championship-boxing-london-23-05-2026/event/1F006446D2D88AAD",
-    "ticket_url": "https://www.ticketmaster.co.uk/a-night-of-professional-championship-boxing-london-23-05-2026/event/1F006446D2D88AAD",
-    "image_url": "https://s1.ticketm.net/dam/a/9fa/577dae00-7820-473e-ac5c-12aba0ab29fa_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287510+00:00",
-    "updated_at": "2026-05-15T13:27:50.287512+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "West Ham v Leeds United",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-24",
-    "start_time": "16:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "London Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/whufc/EDP/Event/Index/2060?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:West-hamchl:Shell-Event-v.Leeds",
-    "ticket_url": "https://www.eticketing.co.uk/whufc/EDP/Event/Index/2060?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:West-hamchl:Shell-Event-v.Leeds",
-    "image_url": "https://s1.ticketm.net/dam/a/967/6ac630f4-4628-4e62-8bf3-1b547bf8c967_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287565+00:00",
-    "updated_at": "2026-05-15T13:27:50.287567+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Betfred Fight Night: Edge of Glory - Venue Premium Tickets",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-30",
-    "start_time": "18:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "OVO Arena Wembley",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/betfred-fight-night-edge-of-glory-london-30-05-2026/event/3700649DDEFF6B6E",
-    "ticket_url": "https://www.ticketmaster.co.uk/betfred-fight-night-edge-of-glory-london-30-05-2026/event/3700649DDEFF6B6E",
-    "image_url": "https://s1.ticketm.net/dam/c/03e/e15ef00f-2c87-4421-ae61-d740851a703e_105891_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287727+00:00",
-    "updated_at": "2026-05-15T13:27:50.287729+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Adobe Women's FA Cup Final",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-31",
-    "start_time": "15:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Wembley Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/adobe-womens-fa-cup-final-london-31-05-2026/event/230064A78F320FFF",
-    "ticket_url": "https://www.ticketmaster.co.uk/adobe-womens-fa-cup-final-london-31-05-2026/event/230064A78F320FFF",
-    "image_url": "https://s1.ticketm.net/dam/a/281/79f12214-4bf4-49f6-8a57-d5661c0d6281_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287746+00:00",
-    "updated_at": "2026-05-15T13:27:50.287750+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "A Night of Professional Championship Boxing - The Final Countdown",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-06-06",
-    "start_time": "18:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "York Hall",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/a-night-of-professional-championship-boxing-london-06-06-2026/event/1F006446DC4F92C0",
-    "ticket_url": "https://www.ticketmaster.co.uk/a-night-of-professional-championship-boxing-london-06-06-2026/event/1F006446DC4F92C0",
-    "image_url": "https://s1.ticketm.net/dam/a/9fa/577dae00-7820-473e-ac5c-12aba0ab29fa_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287826+00:00",
-    "updated_at": "2026-05-15T13:27:50.287827+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Gallagher PREM Final 2026",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-06-20",
-    "start_time": "15:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/premiershiprugby/EDP/Event/Index/89?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:PRL-chl:Shell-Event-Final-26",
-    "ticket_url": "https://www.eticketing.co.uk/premiershiprugby/EDP/Event/Index/89?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:PRL-chl:Shell-Event-Final-26",
-    "image_url": "https://s1.ticketm.net/dam/a/c29/55581a31-3cc3-4c19-b6a9-c10b78a5ac29_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288190+00:00",
-    "updated_at": "2026-05-15T13:27:50.288192+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "WWE Monday Night Raw",
-    "category": "sport",
-    "subcategory": "Wrestling",
-    "start_date": "2026-06-22",
-    "start_time": "18:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "The O2",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/wwe-monday-night-raw-london-22-06-2026/event/35006451AFFC6827",
-    "ticket_url": "https://www.ticketmaster.co.uk/wwe-monday-night-raw-london-22-06-2026/event/35006451AFFC6827",
-    "image_url": "https://s1.ticketm.net/dam/a/831/0863bc93-f085-442a-83e3-e3553f874831_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288224+00:00",
-    "updated_at": "2026-05-15T13:27:50.288226+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "WWE Smackdown",
-    "category": "sport",
-    "subcategory": "Wrestling",
-    "start_date": "2026-06-23",
-    "start_time": "18:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "The O2",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/wwe-smackdown-london-23-06-2026/event/350064A6B5DE2A0A",
-    "ticket_url": "https://www.ticketmaster.co.uk/wwe-smackdown-london-23-06-2026/event/350064A6B5DE2A0A",
-    "image_url": "https://s1.ticketm.net/dam/a/5c9/35ee3acb-04f3-4fb6-a7f4-a494d33305c9_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288244+00:00",
-    "updated_at": "2026-05-15T13:27:50.288245+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Barbarians v Wales & Barbarians Women v Wales Women",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-06-27",
-    "start_time": null,
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/barbarians-v-wales-barbarians-women-v-london-27-06-2026/event/3500638B9B963901",
-    "ticket_url": "https://www.ticketmaster.co.uk/barbarians-v-wales-barbarians-women-v-london-27-06-2026/event/3500638B9B963901",
-    "image_url": "https://s1.ticketm.net/dam/a/bac/4119dbf5-f6e0-4ba8-8a85-a9822b3f3bac_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288364+00:00",
-    "updated_at": "2026-05-15T13:27:50.288366+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Strongman Classic 2026",
-    "category": "sport",
-    "subcategory": "Body Building",
-    "start_date": "2026-07-04",
-    "start_time": "17:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Royal Albert Hall",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/strongman-classic-2026-london-04-07-2026/event/1F0062DEAF165671",
-    "ticket_url": "https://www.ticketmaster.co.uk/strongman-classic-2026-london-04-07-2026/event/1F0062DEAF165671",
-    "image_url": "https://s1.ticketm.net/dam/a/33a/a1d92ba1-36fb-4cba-bfe9-0aa693ea133a_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288402+00:00",
-    "updated_at": "2026-05-15T13:27:50.288404+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Novuna London Athletics Meet 2026 - Part of Wanda Diamond League",
-    "category": "sport",
-    "subcategory": "Track & Field",
-    "start_date": "2026-07-18",
-    "start_time": "12:15:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "London Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/novuna-london-athletics-meet-2026-part-london-18-07-2026/event/350062ED318C24DD",
-    "ticket_url": "https://www.ticketmaster.co.uk/novuna-london-athletics-meet-2026-part-london-18-07-2026/event/350062ED318C24DD",
-    "image_url": "https://s1.ticketm.net/dam/a/e07/c20314fc-4e8e-4232-a1cc-7337e42e6e07_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288426+00:00",
-    "updated_at": "2026-05-15T13:27:50.288429+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "AEW: ALL IN London At Wembley Stadium",
-    "category": "sport",
-    "subcategory": "Wrestling",
-    "start_date": "2026-08-30",
-    "start_time": "16:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Wembley Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/aew-all-in-london-at-wembley-london-30-08-2026/event/2300644BDF331641",
-    "ticket_url": "https://www.ticketmaster.co.uk/aew-all-in-london-at-wembley-london-30-08-2026/event/2300644BDF331641",
-    "image_url": "https://s1.ticketm.net/dam/a/a8e/ad19e569-85cf-496a-a58e-25a709929a8e_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288713+00:00",
-    "updated_at": "2026-05-15T13:27:50.288717+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Union Jack Classic - University of Kansas V Arizona State University",
-    "category": "sport",
-    "subcategory": "College",
-    "start_date": "2026-09-19",
-    "start_time": "17:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Wembley Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/union-jack-classic-university-of-kansas-london-19-09-2026/event/2300632FCA260AA0",
-    "ticket_url": "https://www.ticketmaster.co.uk/union-jack-classic-university-of-kansas-london-19-09-2026/event/2300632FCA260AA0",
-    "image_url": "https://s1.ticketm.net/dam/a/808/f52f26e9-763d-4801-a6a3-6225dab0c808_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288746+00:00",
-    "updated_at": "2026-05-15T13:27:50.288748+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "NFL London 2026: Colts vs Commanders - Register Interest",
-    "category": "sport",
-    "subcategory": "NFL",
-    "start_date": "2026-10-04",
-    "start_time": "14:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Tottenham Hotspur Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.nfl.com/international/games/london2026roi",
-    "ticket_url": "https://www.nfl.com/international/games/london2026roi",
-    "image_url": "https://s1.ticketm.net/dam/a/6ab/f81cd9e0-f66f-4474-9efa-4432859d26ab_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288773+00:00",
-    "updated_at": "2026-05-15T13:27:50.288777+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "NFL London 2026: Eagles vs Jaguars - Register Interest",
-    "category": "sport",
-    "subcategory": "NFL",
-    "start_date": "2026-10-11",
-    "start_time": "14:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Tottenham Hotspur Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.nfl.com/international/games/london2026roi",
-    "ticket_url": "https://www.nfl.com/international/games/london2026roi",
-    "image_url": "https://s1.ticketm.net/dam/a/6ab/f81cd9e0-f66f-4474-9efa-4432859d26ab_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288804+00:00",
-    "updated_at": "2026-05-15T13:27:50.288809+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Nations Championship: England v Australia",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-11-08",
-    "start_time": "15:10:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vAustralia",
-    "ticket_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vAustralia",
-    "image_url": "https://s1.ticketm.net/dam/a/f5c/c490f970-d65c-4442-befd-c21523506f5c_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288843+00:00",
-    "updated_at": "2026-05-15T13:27:50.288848+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Nations Championship: England v Japan",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-11-14",
-    "start_time": "16:40:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vJapan",
-    "ticket_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vJapan",
-    "image_url": "https://s1.ticketm.net/dam/a/f5c/c490f970-d65c-4442-befd-c21523506f5c_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288875+00:00",
-    "updated_at": "2026-05-15T13:27:50.288879+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Nations Championship: England V New Zealand",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-11-21",
-    "start_time": "14:10:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Allianz Stadium, Twickenham",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vNZ",
-    "ticket_url": "https://www.eticketing.co.uk/rfu/?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:RFU-chl:Shell-Event-NC-vNZ",
-    "image_url": "https://s1.ticketm.net/dam/a/f5c/c490f970-d65c-4442-befd-c21523506f5c_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288898+00:00",
-    "updated_at": "2026-05-15T13:27:50.288899+00:00",
-    "ai_score": 96,
-    "quality_score": 96,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "CHELSEA WOMEN v MANCHESTER UNITED WOMEN",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-16",
-    "start_time": "13:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Stamford Bridge",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/chelseafc/EDP/Event/Index/29?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Chelsea-W-chl:Shell-Event-v.Man-uW",
-    "ticket_url": "https://www.eticketing.co.uk/chelseafc/EDP/Event/Index/29?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Chelsea-W-chl:Shell-Event-v.Man-uW",
-    "image_url": "https://s1.ticketm.net/dam/a/1b7/5a7db32b-cfb2-4acb-84ee-035a7819a1b7_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287296+00:00",
-    "updated_at": "2026-05-15T13:27:50.287312+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Saracens V Gloucester Rugby",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-05-16",
-    "start_time": "18:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "StoneX Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/455?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracens-chl:Shell-Event-v.Gloucester",
-    "ticket_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/455?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracens-chl:Shell-Event-v.Gloucester",
-    "image_url": "https://s1.ticketm.net/dam/a/c91/23edb2f7-7c23-4655-b2a4-d33be33d5c91_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287403+00:00",
-    "updated_at": "2026-05-15T13:27:50.287407+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Fulham V Newcastle United",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-24",
-    "start_time": "16:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Craven Cottage",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/fulhamfc/EDP/Event/Index/910?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Fulham-chl:Shell-Event-v.Newcastle",
-    "ticket_url": "https://www.eticketing.co.uk/fulhamfc/EDP/Event/Index/910?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Fulham-chl:Shell-Event-v.Newcastle",
-    "image_url": "https://s1.ticketm.net/dam/a/e8d/96eab09a-dae5-4e09-aa58-f2ced4f31e8d_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287530+00:00",
-    "updated_at": "2026-05-15T13:27:50.287532+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Saracens V Harlequins",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-05-30",
-    "start_time": "13:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "StoneX Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/457?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracenschl:Shell-Event-v.Harlequins",
-    "ticket_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/457?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracenschl:Shell-Event-v.Harlequins",
-    "image_url": "https://s1.ticketm.net/dam/a/c91/23edb2f7-7c23-4655-b2a4-d33be33d5c91_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287687+00:00",
-    "updated_at": "2026-05-15T13:27:50.287690+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "VALORANT MASTERS LONDON",
-    "category": "sport",
-    "subcategory": "eSports",
-    "start_date": "2026-06-06",
-    "start_time": "13:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Copper Box Arena",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/valorant-masters-london-london-06-06-2026/event/3500646AF1156F09",
-    "ticket_url": "https://www.ticketmaster.co.uk/valorant-masters-london-london-06-06-2026/event/3500646AF1156F09",
-    "image_url": "https://s1.ticketm.net/dam/a/d10/9e0bd238-8f9b-4a88-b15a-85b91b587d10_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287803+00:00",
-    "updated_at": "2026-05-15T13:27:50.287806+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Red Bull Soapbox Race 2026",
-    "category": "sport",
-    "subcategory": "Miscellaneous",
-    "start_date": "2026-06-20",
-    "start_time": "11:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Alexandra Palace",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.universe.com/events/red-bull-soapbox-race-2026-tickets-R4BD1Q?ref=ticketmaster",
-    "ticket_url": "https://www.universe.com/events/red-bull-soapbox-race-2026-tickets-R4BD1Q?ref=ticketmaster",
-    "image_url": "https://s1.ticketm.net/dam/c/093/c74cfd95-af21-4e64-9f85-47677b951093_105651_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288143+00:00",
-    "updated_at": "2026-05-15T13:27:50.288146+00:00",
-    "ai_score": 95,
-    "quality_score": 95,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Saracens Women PWR Semi Final",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-06-14",
-    "start_time": "16:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "StoneX Stadium",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/501?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracens-W-chl:Shell-Event-PWR-semi-fin",
-    "ticket_url": "https://www.eticketing.co.uk/saracens/EDP/Event/Index/501?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Saracens-W-chl:Shell-Event-PWR-semi-fin",
-    "image_url": "https://s1.ticketm.net/dam/a/c91/23edb2f7-7c23-4655-b2a4-d33be33d5c91_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287971+00:00",
-    "updated_at": "2026-05-15T13:27:50.287973+00:00",
-    "ai_score": 93,
-    "quality_score": 93,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "London Mavericks V London Pulse - Venue Premium Tickets",
-    "category": "sport",
-    "subcategory": "Netball",
-    "start_date": "2026-05-17",
-    "start_time": "15:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "OVO Arena Wembley",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/london-mavericks-v-london-pulse-venue-london-17-05-2026/event/3700634195B18BE1",
-    "ticket_url": "https://www.ticketmaster.co.uk/london-mavericks-v-london-pulse-venue-london-17-05-2026/event/3700634195B18BE1",
-    "image_url": "https://s1.ticketm.net/dam/c/8f3/a3a439c5-a78c-497c-846c-564fa8cb88f3_106121_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287469+00:00",
-    "updated_at": "2026-05-15T13:27:50.287471+00:00",
-    "ai_score": 91,
-    "quality_score": 91,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Masters Football European Champions 2026 - Venue Premium Tickets",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-31",
-    "start_time": "17:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "OVO Arena Wembley",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/masters-football-european-champions-2026-venue-london-31-05-2026/event/37006458DB1A3651",
-    "ticket_url": "https://www.ticketmaster.co.uk/masters-football-european-champions-2026-venue-london-31-05-2026/event/37006458DB1A3651",
-    "image_url": "https://s1.ticketm.net/dam/a/78c/ec8c2fac-1f19-4306-891a-823559fbe78c_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287772+00:00",
-    "updated_at": "2026-05-15T13:27:50.287774+00:00",
-    "ai_score": 91,
-    "quality_score": 91,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Revolution Pro Wrestling: 14 Year Anniversary - Venue Premium Tickets",
-    "category": "sport",
-    "subcategory": "Wrestling",
-    "start_date": "2026-08-29",
-    "start_time": "18:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "OVO Arena Wembley",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/revolution-pro-wrestling-14-year-anniversary-london-29-08-2026/event/3700636BB4774E90",
-    "ticket_url": "https://www.ticketmaster.co.uk/revolution-pro-wrestling-14-year-anniversary-london-29-08-2026/event/3700636BB4774E90",
-    "image_url": "https://s1.ticketm.net/dam/c/fd9/1f5e7187-e73c-485b-b5d5-edbeb41c4fd9_106131_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288678+00:00",
-    "updated_at": "2026-05-15T13:27:50.288682+00:00",
-    "ai_score": 91,
-    "quality_score": 91,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Baller League UK - Season 3 - Matchday 11",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-18",
-    "start_time": "16:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Copper Box Arena",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/baller-league-uk-season-3-matchday-london-18-05-2026/event/3500645BD86D6AFA",
-    "ticket_url": "https://www.ticketmaster.co.uk/baller-league-uk-season-3-matchday-london-18-05-2026/event/3500645BD86D6AFA",
-    "image_url": "https://s1.ticketm.net/dam/a/e39/2c2093ef-d0d9-4889-b238-889daedb4e39_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287490+00:00",
-    "updated_at": "2026-05-15T13:27:50.287492+00:00",
-    "ai_score": 87,
-    "quality_score": 87,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Women's World Sevens Football - Day 1",
-    "category": "sport",
-    "subcategory": "Soccer",
-    "start_date": "2026-05-28",
-    "start_time": "15:00:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Gtech Community Stadium - Brentford FC",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.eticketing.co.uk/brentfordfc/EDP/Event/Index/971?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Brentford-chl:Shell-Event-WWSF-day1",
-    "ticket_url": "https://www.eticketing.co.uk/brentfordfc/EDP/Event/Index/971?utm_source=Ticketmaster&utm_medium=Shell-Event&utm_campaign=cl:Brentford-chl:Shell-Event-WWSF-day1",
-    "image_url": "https://s1.ticketm.net/dam/a/eff/e4dd565a-1017-4920-8422-992650807eff_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.287585+00:00",
-    "updated_at": "2026-05-15T13:27:50.287588+00:00",
-    "ai_score": 87,
-    "quality_score": 87,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Ellie Kildunne - Game Changer: Live",
-    "category": "sport",
-    "subcategory": "Rugby Union",
-    "start_date": "2026-07-01",
-    "start_time": "18:45:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Bloomsbury Theatre",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/ellie-kildunne-game-changer-live-london-01-07-2026/event/37006465BB57474F",
-    "ticket_url": "https://www.ticketmaster.co.uk/ellie-kildunne-game-changer-live-london-01-07-2026/event/37006465BB57474F",
-    "image_url": "https://s1.ticketm.net/dam/c/09f/1e0da6a5-e815-4153-bc9d-31fb4acd009f_105691_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288382+00:00",
-    "updated_at": "2026-05-15T13:27:50.288384+00:00",
-    "ai_score": 87,
-    "quality_score": 87,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "London Premier Padel P1 - Day 1",
-    "category": "sport",
-    "subcategory": "Miscellaneous",
-    "start_date": "2026-08-04",
-    "start_time": "09:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Olympia",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.ticketmaster.co.uk/london-premier-padel-p1-day-1-london-04-08-2026/event/1F006487F93E5D20",
-    "ticket_url": "https://www.ticketmaster.co.uk/london-premier-padel-p1-day-1-london-04-08-2026/event/1F006487F93E5D20",
-    "image_url": "https://s1.ticketm.net/dam/a/c99/ef1610e2-f494-4e0c-a2db-cad0d1e40c99_SOURCE",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288476+00:00",
-    "updated_at": "2026-05-15T13:27:50.288478+00:00",
-    "ai_score": 87,
-    "quality_score": 87,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Chelsea FC vs Manchester City - FA Cup Final",
-    "category": "sport",
-    "subcategory": "Football",
-    "start_date": "2026-05-16",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Wembley Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.southendunited.co.uk/news/2026/april/10/isuzu-fa-trophy-final-ticket-information-/",
-    "ticket_url": "https://www.southendunited.co.uk/news/2026/april/10/isuzu-fa-trophy-final-ticket-information-/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS9IKKz1PgpLdF5-jHZZp9mLx1qPm-8J5a63nuN3J6nAa0B-7wm3tt14YQ&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "Wembley Stadium sport 2026",
-    "created_at": "2026-05-15T13:27:50.853240+00:00",
-    "updated_at": "2026-05-15T13:27:50.853259+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "2026 EFL Championship play-off final",
-    "category": "sport",
-    "subcategory": "Football",
-    "start_date": "2026-05-23",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Wembley Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://engagehospitality.co.uk/event/football-2026-championship-play-off-final/",
-    "ticket_url": "https://engagehospitality.co.uk/event/football-2026-championship-play-off-final/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQL9qw3eDiEDK3jUN78eLj8N5hnmMaitl4MFRWAYZL3fkis2qCz80wcBoI&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "Wembley Stadium sport 2026",
-    "created_at": "2026-05-15T13:27:50.853825+00:00",
-    "updated_at": "2026-05-15T13:27:50.853830+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Final EFL Championship",
-    "category": "sport",
-    "subcategory": "Football",
-    "start_date": "2026-05-24",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Wembley Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://engagehospitality.co.uk/event/football-2026-league-one-play-off-final/",
-    "ticket_url": "https://engagehospitality.co.uk/event/football-2026-league-one-play-off-final/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQwZSIVGk2Mx_IqqphyS7-vQsKNQga-BCuua28gWW8Ov5TnLWG0nIwnMCQ&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "Wembley Stadium sport tickets 2026",
-    "created_at": "2026-05-15T13:27:50.885683+00:00",
-    "updated_at": "2026-05-15T13:27:50.885697+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "2026 League Two Play-off Final",
-    "category": "sport",
-    "subcategory": "Football",
-    "start_date": "2026-05-25",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Wembley Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://engagehospitality.co.uk/event/football-2026-league-two-play-off-final/",
-    "ticket_url": "https://engagehospitality.co.uk/event/football-2026-league-two-play-off-final/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQL9qw3eDiEDK3jUN78eLj8N5hnmMaitl4MFRWAYZL3fkis2qCz80wcBoI&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "Wembley Stadium sport 2026",
-    "created_at": "2026-05-15T13:27:50.853647+00:00",
-    "updated_at": "2026-05-15T13:27:50.853654+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "The Betfred Challenge Cup Final",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-05-30",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Wembley Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.tickettailor.com/events/barrowraiderstickets/2186469",
-    "ticket_url": "https://www.tickettailor.com/events/barrowraiderstickets/2186469",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSnF8q-B9DhA3PoTnMBwp0sTkwqD2UbNz2PVkJuoGznL0MY9YxDZP62qbQ&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham 2026",
-    "created_at": "2026-05-15T13:27:50.779365+00:00",
-    "updated_at": "2026-05-15T13:27:50.779369+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "England vs Australia - Nations Championship",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-11-08",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Allianz Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.flicks.com.au/sport/rugby/nations-championship-2026/rnations-24/",
-    "ticket_url": "https://www.flicks.com.au/sport/rugby/nations-championship-2026/rnations-24/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQBouuo4rNFFBwa_8iVnD5CxT3jIQDoQpyyv2USyWIiGKerwSj1tRwmQ2g&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham 2026",
-    "created_at": "2026-05-15T13:27:50.778867+00:00",
-    "updated_at": "2026-05-15T13:27:50.778870+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "England vs Japan - Nations Championship",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-11-14",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Allianz Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.hospitalityfinder.co.uk/events/sporting-events/england-v-japan-nations-championship/",
-    "ticket_url": "https://www.hospitalityfinder.co.uk/events/sporting-events/england-v-japan-nations-championship/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcREBCqjuo5LeEnLKF-EuYioGdszb-9dQLTQH_iJESTUQXXlO6NQ7uJ0ZiM&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham 2026",
-    "created_at": "2026-05-15T13:27:50.778971+00:00",
-    "updated_at": "2026-05-15T13:27:50.778974+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Nations Championship Finals Weekend - 3 Day Pass (27-29 November 2026)",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-11-27",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Allianz Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://allianzstadiumtwickenham.com/nations-championship-finals-weekend",
-    "ticket_url": "https://allianzstadiumtwickenham.com/nations-championship-finals-weekend",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS8MOrPdcXmvT5Jg6A8NjcWitPK9JEpw3A1_ZheoGIUS-YQveLDIBCHwRM&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham 2026",
-    "created_at": "2026-05-15T13:27:50.778383+00:00",
-    "updated_at": "2026-05-15T13:27:50.778397+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "NTH1 vs STH1 - Nations Championship",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-11-28",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Allianz Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://engagehospitality.co.uk/event/rugby-saturday-doubleheader-nations-championship-2026/",
-    "ticket_url": "https://engagehospitality.co.uk/event/rugby-saturday-doubleheader-nations-championship-2026/",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSH6XFqIL-S7s_FirBrwWwH8hsZ5rG0urQ9jo2RbXWxX3QA2zOaOdEJjiQ&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham 2026",
-    "created_at": "2026-05-15T13:27:50.779264+00:00",
-    "updated_at": "2026-05-15T13:27:50.779267+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "TBC v TBC, Nations Championship 2026",
-    "category": "sport",
-    "subcategory": "Rugby",
-    "start_date": "2026-11-30",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Allianz Stadium",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.flicks.com.au/sport/rugby/nations-championship-2026/rnations-39/",
-    "ticket_url": "https://www.flicks.com.au/sport/rugby/nations-championship-2026/rnations-39/",
-    "image_url": "https://www.google.com/maps/vt/data=CpXDBN1bHU3Bz0mQ8y5h7fBM_YEPsy3O2QfOTyVT5xODHuasHsIoFZ3tRgnNqyTwmVANKxxvaWUCgpl1R6ZWwqKdlsPk2vEw9XasvOTnwdDkvogq5dk",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "rugby Twickenham tickets 2026",
-    "created_at": "2026-05-15T13:27:50.807137+00:00",
-    "updated_at": "2026-05-15T13:27:50.807139+00:00",
-    "ai_score": 81,
-    "quality_score": 81,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Lord's Long Room Lunch 2026: Chris Woakes, David Gower & Andy Flower",
-    "category": "sport",
-    "subcategory": "Cricket",
-    "start_date": "2026-07-30",
-    "start_time": "11:30:00",
-    "city": "London",
-    "country": "Great Britain",
-    "venue": "Lord's Cricket Ground",
-    "source_name": "Ticketmaster",
-    "source_url": "https://www.universe.com/events/lords-long-room-lunch-2026-chris-woakes-david-gower-andy-flower-tickets-3QLKVP?ref=ticketmaster",
-    "ticket_url": "https://www.universe.com/events/lords-long-room-lunch-2026-chris-woakes-david-gower-andy-flower-tickets-3QLKVP?ref=ticketmaster",
-    "image_url": "https://s1.ticketm.net/dam/c/bc3/8490d3ca-7bb6-4662-ab7c-acc9f5d97bc3_106051_TABLET_LANDSCAPE_LARGE_16_9.jpg",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "created_at": "2026-05-15T13:27:50.288456+00:00",
-    "updated_at": "2026-05-15T13:27:50.288459+00:00",
-    "ai_score": 79,
-    "quality_score": 79,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "SHEBOX - Women’s Only Boxing Session",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-15",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Academy Sport",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.eventbrite.com/e/shebox-womens-only-boxing-session-tickets-1988601451473",
-    "ticket_url": "https://www.eventbrite.com/e/shebox-womens-only-boxing-session-tickets-1988601451473",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ3X2x3wx7kkrOhsPGtXBQpewEc8tegBC2tHzGb4z4aV99k9chyMxq54J4&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "boxing London tickets 2026",
-    "created_at": "2026-05-15T13:27:50.726099+00:00",
-    "updated_at": "2026-05-15T13:27:50.726101+00:00",
-    "ai_score": 77,
-    "quality_score": 77,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Female Boxing Sessions - East London",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-16",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "12x3 Boxing",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.eventbrite.co.uk/e/female-boxing-sessions-east-london-tickets-1982518053867",
-    "ticket_url": "https://www.eventbrite.co.uk/e/female-boxing-sessions-east-london-tickets-1982518053867",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTx5LeWwj1KPBt8Mxo-Mter89NCZG8iRBKsYlKydc3NTQznHThQaNaEQZw&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "boxing London tickets 2026",
-    "created_at": "2026-05-15T13:27:50.725638+00:00",
-    "updated_at": "2026-05-15T13:27:50.725650+00:00",
-    "ai_score": 77,
-    "quality_score": 77,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Ladies Only Self Defense",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-16",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Bil Sha Boxing Club",
-    "source_name": "Sports Expansion",
-    "source_url": "https://legitfit.com/p/event/680fa4fde5fce80d6ed017fc?isIframe=true",
-    "ticket_url": "https://legitfit.com/p/event/680fa4fde5fce80d6ed017fc?isIframe=true",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTJ7LsJgAn_1X4nweP2-aLC9P6Sp7kuNzN8oSZi3hg&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "boxing London tickets 2026",
-    "created_at": "2026-05-15T13:27:50.726197+00:00",
-    "updated_at": "2026-05-15T13:27:50.726199+00:00",
-    "ai_score": 77,
-    "quality_score": 77,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "STICK BOXING self-defence classes",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-16",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Deptford Boxing Gym",
-    "source_name": "Sports Expansion",
-    "source_url": "https://www.eventbrite.com/e/stick-boxing-self-defence-classes-tickets-1986646187225",
-    "ticket_url": "https://www.eventbrite.com/e/stick-boxing-self-defence-classes-tickets-1986646187225",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRCYnageFFf6vV7S8OOLUE-bgFR20mcZoSVPYig4nQ_puyvHFwznrFyXkM&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "boxing London tickets 2026",
-    "created_at": "2026-05-15T13:27:50.726008+00:00",
-    "updated_at": "2026-05-15T13:27:50.726010+00:00",
-    "ai_score": 77,
-    "quality_score": 77,
-    "is_low_quality_conference": false
-  },
-  {
-    "title": "Boxing Class",
-    "category": "sport",
-    "subcategory": "Boxing",
-    "start_date": "2026-05-28",
-    "start_time": null,
-    "city": "London",
-    "country": "GB",
-    "venue": "Abi's Fitness",
-    "source_name": "Sports Expansion",
-    "source_url": "https://legitfit.com/p/timetable/68d2c14e61db4069735f7679/2026-05-28?isIframe=true",
-    "ticket_url": "https://legitfit.com/p/timetable/68d2c14e61db4069735f7679/2026-05-28?isIframe=true",
-    "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQAnDT0w6j5C6nQ7FxKItj-ZMREH0q26ww8ddSF8g8&s",
-    "price_min": null,
-    "price_max": null,
-    "currency": null,
-    "is_vip_available": false,
-    "status": "active",
-    "sports_expansion_query": "Boxing tickets London 2026",
-    "created_at": "2026-05-15T13:27:50.978443+00:00",
-    "updated_at": "2026-05-15T13:27:50.978460+00:00",
-    "ai_score": 77,
-    "quality_score": 77,
-    "is_low_quality_conference": false
-  }
+
+PORT = int(os.environ.get("PORT", "8000"))
+
+TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY")
+PREDICT_API_KEY = os.environ.get("PREDICT_API_KEY")
+PREDICT_API_URL = os.environ.get("PREDICT_API_URL", "https://api.predicthq.com/v1/events/")
+
+FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY")
+FOOTBALL_API_BASE_URL = "https://v3.football.api-sports.io"
+
+# v14: la chiave resta in /health, ma NON chiamiamo più /events/search/
+# perché il debug v13 ha confermato HTTP 404 su quell'endpoint.
+EVENTBRITE_API_KEY = os.environ.get("EVENTBRITE_API_KEY")
+EVENTBRITE_API_BASE_URL = "https://www.eventbriteapi.com/v3"
+
+SEATGEEK_CLIENT_ID = os.environ.get("SEATGEEK_CLIENT_ID")
+SEATGEEK_CLIENT_SECRET = os.environ.get("SEATGEEK_CLIENT_SECRET")
+SEATGEEK_API_BASE_URL = "https://api.seatgeek.com/2"
+
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
+SERPAPI_API_BASE_URL = "https://serpapi.com/search.json"
+
+
+CITY_MAP = {
+    "roma": "Rome",
+    "rome": "Rome",
+    "milano": "Milan",
+    "milan": "Milan",
+    "londra": "London",
+    "london": "London",
+    "parigi": "Paris",
+    "paris": "Paris",
+    "new york": "New York",
+    "ny": "New York",
+    "tokyo": "Tokyo",
+    "osaka": "Osaka",
+    "kyoto": "Kyoto",
+    "yokohama": "Yokohama",
+    "madrid": "Madrid",
+    "barcellona": "Barcelona",
+    "barcelona": "Barcelona",
+    "berlino": "Berlin",
+    "berlin": "Berlin",
+    "monaco": "Munich",
+    "munich": "Munich",
+    "toronto": "Toronto",
+    "vancouver": "Vancouver",
+    "montreal": "Montreal",
+    "montréal": "Montreal",
+    "sao paulo": "São Paulo",
+    "san paolo": "São Paulo",
+    "rio": "Rio de Janeiro",
+    "rio de janeiro": "Rio de Janeiro",
+    "buenos aires": "Buenos Aires",
+    "shanghai": "Shanghai",
+    "pechino": "Beijing",
+    "beijing": "Beijing",
+}
+
+
+COUNTRY_NAME_MAP = {
+    "IT": "italy",
+    "US": "usa",
+    "GB": "uk",
+    "FR": "france",
+    "ES": "spain",
+    "DE": "germany",
+    "JP": "japan",
+    "BR": "brazil",
+    "AR": "argentina",
+    "CA": "canada",
+    "CN": "china",
+}
+
+
+DEFAULT_COUNTRY_CITY = {
+    "IT": "Rome",
+    "US": "New York",
+    "GB": "London",
+    "FR": "Paris",
+    "ES": "Madrid",
+    "DE": "Berlin",
+    "JP": "Tokyo",
+    "BR": "São Paulo",
+    "AR": "Buenos Aires",
+    "CA": "Toronto",
+    "CN": "Shanghai",
+}
+
+COUNTRY_ONLY_ALIASES = {
+    "italia": "IT",
+    "italy": "IT",
+    "stati uniti": "US",
+    "usa": "US",
+    "us": "US",
+    "united states": "US",
+    "united states of america": "US",
+    "regno unito": "GB",
+    "uk": "GB",
+    "gb": "GB",
+    "united kingdom": "GB",
+    "francia": "FR",
+    "france": "FR",
+    "spagna": "ES",
+    "spain": "ES",
+    "germania": "DE",
+    "germany": "DE",
+    "giappone": "JP",
+    "japan": "JP",
+    "brasile": "BR",
+    "brazil": "BR",
+    "argentina": "AR",
+    "canada": "CA",
+    "cina": "CN",
+    "china": "CN",
+}
+
+
+PREDICTHQ_CATEGORY_MAP = {
+    "concert": "concerts,festivals,performing-arts",
+    "sport": "sports",
+    "motorsport": "sports",
+    "horse_racing": "sports",
+    "theatre": "performing-arts",
+    "culture": "performing-arts,community,festivals,expos,conferences",
+}
+
+
+SERPAPI_CATEGORY_QUERY_MAP = {
+    "concert": "concerts live music festivals",
+    "sport": "sports matches games tickets",
+    "motorsport": "motorsport racing grand prix",
+    "horse_racing": "horse racing events",
+    "theatre": "theatre shows musicals performing arts",
+    "culture": "events exhibitions festivals conferences",
+    "event": "events",
+    "": "events",
+}
+
+
+JAPAN_LOCAL_SOURCE_LABELS = [
+    "Ticket Pia",
+    "Lawson Ticket",
+    "eplus",
+    "J.League",
+    "NPB",
 ]
+
+
+SPORTS_EXPANSION_KEYWORDS = {
+    "boxing": {
+        "category": "sport",
+        "subcategory": "Boxing",
+        "queries": ["boxing events", "boxing fights", "boxing tickets"],
+        "official_sources": ["BoxRec", "DAZN", "Top Rank", "Matchroom Boxing", "PBC"],
+    },
+    "mma": {
+        "category": "sport",
+        "subcategory": "MMA",
+        "queries": ["mma events", "ufc events", "mma tickets"],
+        "official_sources": ["UFC", "PFL", "ONE Championship"],
+    },
+    "nfl": {
+        "category": "sport",
+        "subcategory": "NFL",
+        "queries": ["NFL games", "american football games", "NFL tickets"],
+        "official_sources": ["NFL", "Ticketmaster", "SeatGeek"],
+    },
+    "motogp": {
+        "category": "motorsport",
+        "subcategory": "MotoGP",
+        "queries": ["MotoGP Grand Prix", "MotoGP tickets", "motorcycle grand prix"],
+        "official_sources": ["MotoGP"],
+    },
+    "formula1": {
+        "category": "motorsport",
+        "subcategory": "Formula 1",
+        "queries": ["Formula 1 Grand Prix", "F1 tickets", "Formula 1 race"],
+        "official_sources": ["Formula 1"],
+    },
+    "nascar": {
+        "category": "motorsport",
+        "subcategory": "NASCAR",
+        "queries": ["NASCAR race", "NASCAR tickets"],
+        "official_sources": ["NASCAR"],
+    },
+    "rugby": {
+        "category": "sport",
+        "subcategory": "Rugby",
+        "queries": ["rugby matches", "rugby tickets"],
+        "official_sources": ["World Rugby", "Six Nations"],
+    },
+    "tennis": {
+        "category": "sport",
+        "subcategory": "Tennis",
+        "queries": ["tennis tournament", "ATP WTA tennis tickets"],
+        "official_sources": ["ATP", "WTA", "ITF"],
+    },
+    "basketball": {
+        "category": "sport",
+        "subcategory": "Basketball",
+        "queries": ["basketball games", "NBA games", "basketball tickets"],
+        "official_sources": ["NBA", "FIBA", "EuroLeague"],
+    },
+    "baseball": {
+        "category": "sport",
+        "subcategory": "Baseball",
+        "queries": ["baseball games", "MLB games", "baseball tickets"],
+        "official_sources": ["MLB", "NPB"],
+    },
+    "hockey": {
+        "category": "sport",
+        "subcategory": "Hockey",
+        "queries": ["hockey games", "NHL games", "ice hockey tickets"],
+        "official_sources": ["NHL", "IIHF"],
+    },
+}
+
+SPORTS_EXPANSION_CITY_HINTS = {
+    "new york|us": ["New York Giants", "New York Jets", "New York Knicks", "New York Rangers", "New York Yankees", "boxing Madison Square Garden"],
+    "las vegas|us": ["UFC Las Vegas", "boxing Las Vegas", "Las Vegas Raiders", "Formula 1 Las Vegas Grand Prix"],
+    "london|gb": ["NFL London Games", "boxing London", "rugby Twickenham", "Wembley Stadium sport"],
+    "paris|fr": ["UFC Paris", "rugby Paris", "Roland Garros", "Paris basketball"],
+    "rome|it": ["Six Nations Rome", "Internazionali BNL tennis", "boxing Rome"],
+    "milan|it": ["basketball Milan", "boxing Milan", "Monza Formula 1"],
+    "madrid|es": ["MotoGP Spain", "boxing Madrid", "Madrid Open tennis"],
+    "barcelona|es": ["Formula 1 Spanish Grand Prix", "MotoGP Catalunya", "basketball Barcelona"],
+    "tokyo|jp": ["sumo Tokyo", "boxing Tokyo", "NPB Tokyo", "J League Tokyo", "MotoGP Japan"],
+    "são paulo|br": ["Formula 1 São Paulo Grand Prix", "UFC Brazil", "boxing São Paulo"],
+    "buenos aires|ar": ["boxing Buenos Aires", "rugby Argentina", "tennis Buenos Aires"],
+    "toronto|ca": ["Toronto Blue Jays", "Toronto Raptors", "Toronto Maple Leafs", "UFC Toronto"],
+    "shanghai|cn": ["Formula 1 Chinese Grand Prix", "Shanghai tennis", "boxing Shanghai"],
+}
+
+
+def build_japan_local_search_url(city="", category="", from_date="", to_date=""):
+    normalized_city = normalize_city(city or "Tokyo")
+    category_text = SERPAPI_CATEGORY_QUERY_MAP.get(category, "events")
+    query = f"{normalized_city} Japan {category_text} {from_date} {to_date} official tickets Pia Lawson eplus".strip()
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
+SEATGEEK_CITY_GEO = {
+    "new york|us": "40.7128,-74.0060",
+    "los angeles|us": "34.0522,-118.2437",
+    "las vegas|us": "36.1699,-115.1398",
+    "miami|us": "25.7617,-80.1918",
+    "chicago|us": "41.8781,-87.6298",
+    "san francisco|us": "37.7749,-122.4194",
+    "london|gb": "51.5074,-0.1278",
+    "paris|fr": "48.8566,2.3522",
+    "rome|it": "41.9028,12.4964",
+    "milan|it": "45.4642,9.1900",
+    "madrid|es": "40.4168,-3.7038",
+    "barcelona|es": "41.3851,2.1734",
+    "berlin|de": "52.5200,13.4050",
+    "munich|de": "48.1351,11.5820",
+    "tokyo|jp": "35.6762,139.6503",
+    "osaka|jp": "34.6937,135.5023",
+    "kyoto|jp": "35.0116,135.7681",
+    "toronto|ca": "43.6532,-79.3832",
+    "vancouver|ca": "49.2827,-123.1207",
+    "montreal|ca": "45.5017,-73.5673",
+    "são paulo|br": "-23.5505,-46.6333",
+    "rio de janeiro|br": "-22.9068,-43.1729",
+    "buenos aires|ar": "-34.6037,-58.3816",
+    "shanghai|cn": "31.2304,121.4737",
+    "beijing|cn": "39.9042,116.4074",
+}
+
+
+FOOTBALL_CITY_TEAMS = {
+    "london|gb": [
+        {"id": 42, "name": "Arsenal", "venue": "Emirates Stadium"},
+        {"id": 49, "name": "Chelsea", "venue": "Stamford Bridge"},
+        {"id": 47, "name": "Tottenham", "venue": "Tottenham Hotspur Stadium"},
+        {"id": 48, "name": "West Ham", "venue": "London Stadium"},
+        {"id": 36, "name": "Fulham", "venue": "Craven Cottage"},
+        {"id": 52, "name": "Crystal Palace", "venue": "Selhurst Park"},
+        {"id": 55, "name": "Brentford", "venue": "Gtech Community Stadium"},
+    ],
+    "rome|it": [
+        {"id": 497, "name": "AS Roma", "venue": "Stadio Olimpico"},
+        {"id": 487, "name": "Lazio", "venue": "Stadio Olimpico"},
+    ],
+    "milan|it": [
+        {"id": 489, "name": "AC Milan", "venue": "San Siro"},
+        {"id": 505, "name": "Inter", "venue": "San Siro"},
+    ],
+    "madrid|es": [
+        {"id": 541, "name": "Real Madrid", "venue": "Santiago Bernabeu"},
+        {"id": 530, "name": "Atletico Madrid", "venue": "Civitas Metropolitano"},
+        {"id": 728, "name": "Rayo Vallecano", "venue": "Campo de Futbol de Vallecas"},
+    ],
+    "barcelona|es": [
+        {"id": 529, "name": "Barcelona", "venue": "Camp Nou"},
+        {"id": 540, "name": "Espanyol", "venue": "RCDE Stadium"},
+    ],
+    "paris|fr": [
+        {"id": 85, "name": "Paris Saint Germain", "venue": "Parc des Princes"},
+    ],
+    "munich|de": [
+        {"id": 157, "name": "Bayern Munich", "venue": "Allianz Arena"},
+    ],
+    "berlin|de": [
+        {"id": 182, "name": "Union Berlin", "venue": "Stadion An der Alten Forsterei"},
+        {"id": 159, "name": "Hertha Berlin", "venue": "Olympiastadion Berlin"},
+    ],
+    "new york|us": [
+        {"id": 1608, "name": "New York City FC", "venue": "Yankee Stadium"},
+        {"id": 1602, "name": "New York Red Bulls", "venue": "Red Bull Arena"},
+    ],
+}
+
+
+FOOTBALL_CITY_LEAGUES = {
+    "london|gb": [{"id": 39, "name": "Premier League"}],
+    "rome|it": [{"id": 135, "name": "Serie A"}],
+    "milan|it": [{"id": 135, "name": "Serie A"}],
+    "madrid|es": [{"id": 140, "name": "La Liga"}],
+    "barcelona|es": [{"id": 140, "name": "La Liga"}],
+    "paris|fr": [{"id": 61, "name": "Ligue 1"}],
+    "munich|de": [{"id": 78, "name": "Bundesliga"}],
+    "berlin|de": [{"id": 78, "name": "Bundesliga"}],
+}
+
+
+CITY_ALIASES = {
+    "rome": ["rome", "roma"],
+    "roma": ["rome", "roma"],
+    "milan": ["milan", "milano"],
+    "milano": ["milan", "milano"],
+    "london": ["london", "londra"],
+    "londra": ["london", "londra"],
+    "paris": ["paris", "parigi"],
+    "parigi": ["paris", "parigi"],
+    "munich": ["munich", "monaco", "muenchen", "münchen"],
+    "monaco": ["munich", "monaco", "muenchen", "münchen"],
+    "new york": ["new york", "nyc"],
+    "barcelona": ["barcelona", "barcellona"],
+    "barcellona": ["barcelona", "barcellona"],
+    "berlin": ["berlin", "berlino"],
+    "berlino": ["berlin", "berlino"],
+}
+
+
+ROME_FOOTBALL_TEAMS = [
+    "lazio",
+    "lazio rome",
+    "ss lazio",
+    "as roma",
+    "roma",
+]
+
+
+ITALIAN_FOOTBALL_WORDS = [
+    "serie a",
+    "serie b",
+    "coppa italia",
+    "supercoppa",
+    "calcio",
+    "fc",
+    "bc",
+    "ac milan",
+    "inter",
+    "juventus",
+    "atalanta",
+    "sassuolo",
+    "torino",
+    "cagliari",
+    "bologna",
+    "fiorentina",
+    "napoli",
+    "verona",
+    "genoa",
+    "lecce",
+    "monza",
+    "udinese",
+    "empoli",
+    "parma",
+]
+
+
+BIG_MATCH_WORDS = [
+    "ac milan",
+    "inter",
+    "juventus",
+    "napoli",
+    "atalanta",
+    "roma",
+    "lazio",
+    "arsenal",
+    "chelsea",
+    "tottenham",
+    "liverpool",
+    "manchester",
+    "real madrid",
+    "barcelona",
+    "atletico",
+    "psg",
+    "bayern",
+]
+
+
+RECURRING_LOW_PRIORITY_TITLES = [
+    "the great opera arias concert",
+    "opera arias concert",
+    "stacey kent",
+    "mononeon",
+    "vince giordano and the nighthawks",
+    "live weekly",
+]
+
+
+LOW_QUALITY_TITLE_WORDS = [
+    "parking",
+    "parking pass",
+    "parking lot",
+    "parkwhiz",
+    "garage",
+    "international conference",
+    "conference on",
+    "academic",
+    "science and economics",
+    "social science",
+    "humanities",
+    "proceedings",
+    "symposium",
+    "congress",
+    "seminar",
+    "webinar",
+    "round table",
+    "call for papers",
+    "icssh",
+    "ic3se",
+    "npsa",
+    "ipd",
+    "mun ",
+    "model united nations",
+    "dentistry",
+    "inclusive peace education",
+]
+
+
+PREMIUM_EXPERIENCE_WORDS = [
+    "festival",
+    "concert",
+    "live",
+    "stadium",
+    "arena",
+    "grand prix",
+    "derby",
+    "marathon",
+    "tennis",
+    "theatre",
+    "theater",
+    "musical",
+    "opera",
+    "nightlife",
+    "food",
+    "wine",
+    "design",
+    "fashion",
+    "art",
+    "exhibition",
+    "expo",
+    "show",
+    "final",
+    "world cup",
+    "champions league",
+    "serie a",
+    "premier league",
+    "la liga",
+    "nba",
+    "nfl",
+    "ufc",
+    "wwe",
+]
+
+
+PREMIUM_VENUE_WORDS = [
+    "stadium",
+    "arena",
+    "dome",
+    "olympic",
+    "olimpico",
+    "o2",
+    "wembley",
+    "madison square garden",
+    "royal albert hall",
+    "tokyo dome",
+    "foro italico",
+    "san siro",
+    "camp nou",
+    "santiago bernabeu",
+    "parc des princes",
+    "allianz arena",
+]
+
+
+def normalize_city(city):
+    key = (city or "").strip().lower()
+    return CITY_MAP.get(key, city.strip())
+
+
+def normalize_country_code(country):
+    key = (country or "").strip().lower()
+
+    country_map = {
+        "it": "IT",
+        "italia": "IT",
+        "italy": "IT",
+        "us": "US",
+        "usa": "US",
+        "united states": "US",
+        "united states of america": "US",
+        "stati uniti": "US",
+        "gb": "GB",
+        "uk": "GB",
+        "united kingdom": "GB",
+        "regno unito": "GB",
+        "great britain": "GB",
+        "fr": "FR",
+        "france": "FR",
+        "francia": "FR",
+        "es": "ES",
+        "spain": "ES",
+        "spagna": "ES",
+        "de": "DE",
+        "germany": "DE",
+        "germania": "DE",
+        "jp": "JP",
+        "japan": "JP",
+        "giappone": "JP",
+        "ca": "CA",
+        "canada": "CA",
+        "cn": "CN",
+        "china": "CN",
+        "cina": "CN",
+        "br": "BR",
+        "brazil": "BR",
+        "brasile": "BR",
+        "ar": "AR",
+        "argentina": "AR",
+    }
+
+    if not key:
+        return ""
+
+    return country_map.get(key, country.strip().upper())
+
+
+def normalize_request_location(city="", country=""):
+    """
+    v18: se l'utente cerca solo un paese ("giappone", "japan", "canada"),
+    lo trasformiamo in una città principale + country code.
+    Questo evita query generiche che possono far entrare eventi USA/Canada non richiesti.
+    """
+    raw_city = clean_text(city)
+    country_code = normalize_country_code(country)
+
+    if not country_code and raw_city in COUNTRY_ONLY_ALIASES:
+        country_code = COUNTRY_ONLY_ALIASES[raw_city]
+        city = DEFAULT_COUNTRY_CITY.get(country_code, "")
+
+    if country_code and not clean_text(city):
+        city = DEFAULT_COUNTRY_CITY.get(country_code, "")
+
+    return normalize_city(city), country_code
+
+
+def event_matches_requested_country(event, requested_country):
+    requested_code = normalize_country_code(requested_country)
+
+    if not requested_code:
+        return True
+
+    event_country = event.get("country") or ""
+    event_country_code = normalize_country_code(event_country)
+
+    if event_country_code == requested_code:
+        return True
+
+    return False
+
+
+def serpapi_address_matches_city(address_parts, requested_city="", requested_country=""):
+    """
+    v21: Google Events può restituire risultati vicini ma non pertinenti.
+    Per Tokyo accettiamo Tokyo e alcune aree metropolitane vicine, ma scartiamo città lontane tipo Nagoya.
+    """
+    requested_city_clean = clean_text(normalize_city(requested_city))
+    country_code = normalize_country_code(requested_country)
+    address_text = clean_text(" ".join([str(part) for part in (address_parts or [])]))
+
+    if not requested_city_clean:
+        return True
+
+    if requested_city_clean in address_text:
+        return True
+
+    if country_code == "JP" and requested_city_clean == "tokyo":
+        tokyo_area_terms = [
+            "tokyo",
+            "minato",
+            "shibuya",
+            "shinjuku",
+            "chiyoda",
+            "taito",
+            "sumida",
+            "ginza",
+            "akasaka",
+            "roppongi",
+            "meguro",
+            "setagaya",
+            "saitama",
+            "yokohama",
+            "chiba",
+            "kawasaki",
+        ]
+        far_japan_terms = [
+            "nagoya",
+            "kyoto",
+            "osaka",
+            "fukuoka",
+            "sapporo",
+            "hiroshima",
+            "kobe",
+        ]
+
+        if any(term in address_text for term in far_japan_terms):
+            return False
+
+        return any(term in address_text for term in tokyo_area_terms)
+
+    aliases = city_aliases_for(requested_city_clean)
+    return any(alias and alias in address_text for alias in aliases)
+
+
+def source_priority(event):
+    source = clean_text(event.get("source_name"))
+    priority = {
+        "seatgeek": 100,
+        "ticketmaster": 95,
+        "serpapi": 80,
+        "sports expansion": 78,
+        "api-football": 75,
+        "sports official fallback": 42,
+        "predicthq": 60,
+        "japan local fallback": 40,
+    }
+    return priority.get(source, 50)
+
+
+def normalize_category(segment):
+    if not segment:
+        return "event"
+
+    s = segment.lower()
+
+    if "music" in s or "concert" in s or "festival" in s:
+        return "concert"
+
+    if "motorsport" in s or "motor" in s or "racing" in s or "formula" in s or "grand prix" in s:
+        return "motorsport"
+
+    if "horse" in s or "equestrian" in s:
+        return "horse_racing"
+
+    if "football" in s or "soccer" in s:
+        return "sport"
+
+    if "sports" in s or "sport" in s:
+        return "sport"
+
+    if "arts" in s or "theatre" in s or "theater" in s or "performing" in s:
+        return "theatre"
+
+    if "film" in s or "community" in s or "expo" in s or "conference" in s:
+        return "culture"
+
+    if "business" in s or "food" in s or "drink" in s or "nightlife" in s:
+        return "culture"
+
+    return "event"
+
+
+def clean_text(value):
+    return (value or "").strip().lower()
+
+
+def city_aliases_for(city):
+    city_key = clean_text(city)
+    normalized = clean_text(normalize_city(city))
+    aliases = set()
+
+    aliases.add(city_key)
+    aliases.add(normalized)
+
+    for key in [city_key, normalized]:
+        for alias in CITY_ALIASES.get(key, []):
+            aliases.add(clean_text(alias))
+
+    return [alias for alias in aliases if alias]
+
+
+def event_matches_requested_city(event, requested_city):
+    if not requested_city:
+        return True
+
+    event_city = clean_text(event.get("city"))
+
+    if not event_city:
+        return True
+
+    allowed = city_aliases_for(requested_city)
+
+    if event_city in allowed:
+        return True
+
+    for alias in allowed:
+        if alias and alias in event_city:
+            return True
+
+    return False
+
+
+def normalize_event_title(title):
+    title = clean_text(title)
+
+    remove_words = [
+        "flexiticket",
+        "flex ticket",
+        "flex-ticket",
+        "standard ticket",
+        "skip the line",
+        "skip-the-line",
+        "fanzone",
+        "fan zone",
+        "watch party",
+        "viewing party",
+        "entry ticket",
+        "entrance ticket",
+        "admission ticket",
+        "general admission",
+        "official ticket",
+        "tickets",
+        "ticket",
+        "vip",
+        "experience",
+        "tour",
+        "guided tour",
+        "museum",
+        "museo",
+        "day one",
+        "day two",
+        "day three",
+        "venue premium tickets",
+        "premium tickets",
+        "tba vs tba",
+        "date tbc",
+        "men women s doubleheader",
+        "men women doubleheader",
+    ]
+
+    for word in remove_words:
+        title = title.replace(word, " ")
+
+    title = re.sub(r"[^a-z0-9\s]", " ", title)
+    title = re.sub(r"\s+", " ", title).strip()
+
+    return title
+
+
+def title_core_for_dedupe(title):
+    value = normalize_event_title(title)
+
+    for sep in [" with ", " w ", " at ", " tour ", " live ", " presents "]:
+        if sep in value:
+            value = value.split(sep)[0].strip()
+
+    # Mantieni le prime parole significative: utile per "Don Toliver..." vs "Don Toliver: Octane Tour".
+    words = [w for w in value.split() if len(w) > 1]
+    return " ".join(words[:3]).strip()
+
+
+def similar_text(a, b):
+    a = normalize_event_title(a)
+    b = normalize_event_title(b)
+
+    if not a or not b:
+        return False
+
+    if a == b:
+        return True
+
+    if a in b or b in a:
+        return True
+
+    core_a = title_core_for_dedupe(a)
+    core_b = title_core_for_dedupe(b)
+
+    if core_a and core_b:
+        if core_a == core_b:
+            return True
+        if len(core_a) >= 6 and (core_a in b or core_a in core_b):
+            return True
+        if len(core_b) >= 6 and (core_b in a or core_b in core_a):
+            return True
+
+    ratio = SequenceMatcher(None, a, b).ratio()
+    return ratio >= 0.84
+
+
+def should_drop_low_value_event(event):
+    title = clean_text(event.get("title"))
+    source = clean_text(event.get("source_name"))
+    source_url = clean_text(event.get("source_url"))
+    ticket_url = clean_text(event.get("ticket_url"))
+    venue = clean_text(event.get("venue"))
+    category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
+    combined = f"{title} {source_url} {ticket_url} {venue} {subcategory}"
+
+    low_value_words = [
+        "flexiticket",
+        "flex ticket",
+        "flex-ticket",
+        "museum flex",
+        "standard admission",
+        "general admission",
+        "skip the line",
+        "skip-the-line",
+    ]
+
+    for word in low_value_words:
+        if word in title:
+            return True
+
+    # v27: non sono eventi sportivi live; sono fan park / watch party.
+    sport_watch_party_words = [
+        "fanzone",
+        "fan zone",
+        "fanpark",
+        "fan park",
+        "watch party",
+        "viewing party",
+        "world cup 2026: england v",
+        "brixton world cup",
+    ]
+    if category == "sport" and any(word in combined for word in sport_watch_party_words):
+        return True
+
+    # v27: comedy/concert finiti dentro sport via SerpApi generico.
+    non_sport_words = [
+        "peter kay",
+        "comedy",
+        "harry styles",
+        "concert",
+        "live tour",
+    ]
+    if category == "sport" and source in ["serpapi", "sports expansion"] and any(word in combined for word in non_sport_words):
+        strong_sport_words = ["boxing", "rugby", "nfl", "wwe", "wrestling", "fa cup", "efl", "premiership", "championship"]
+        if not any(word in combined for word in strong_sport_words):
+            return True
+
+    bad_links = [
+        "open.spotify.com",
+        "spotify.com",
+        "dice.fm",
+        "gigtotem.com/listings",
+    ]
+    if category == "sport" and any(bad in combined for bad in bad_links):
+        return True
+
+    if source == "ticketmaster":
+        museum_words = [
+            "museum",
+            "museo",
+            "exhibition ticket",
+            "entry ticket",
+            "admission ticket",
+        ]
+
+        for word in museum_words:
+            if word in title:
+                return True
+
+    # v29: elimina lezioni/sessioni ricorrenti e risultati non-evento da SerpApi/Sports Expansion.
+    category = clean_text(event.get("category"))
+    source = clean_text(event.get("source_name"))
+    subcategory = clean_text(event.get("subcategory"))
+    venue = clean_text(event.get("venue"))
+    source_url = clean_text(event.get("source_url"))
+    ticket_url = clean_text(event.get("ticket_url"))
+    combined = f"{title} {subcategory} {venue} {source_url} {ticket_url}"
+
+    training_words = [
+        "class",
+        "classes",
+        "session",
+        "sessions",
+        "self defence",
+        "self-defense",
+        "ladies only",
+        "women’s only",
+        "womens only",
+        "fitness",
+        "gym",
+        "timetable",
+    ]
+
+    if category == "sport" and source in ["sports expansion", "serpapi"]:
+        if any(word in combined for word in training_words):
+            return True
+
+    # Google/SerpApi può restituire pagine mappa o pagine non-ticketing poco affidabili.
+    weak_url_words = [
+        "google.com/maps",
+        "maps/vt",
+        "legitfit.com/p/timetable",
+    ]
+    if source in ["sports expansion", "serpapi"] and any(word in combined for word in weak_url_words):
+        return True
+
+    return False
+
+
+def is_low_quality_conference(event):
+    title = clean_text(event.get("title"))
+    subcategory = clean_text(event.get("subcategory"))
+    category = clean_text(event.get("category"))
+    venue = clean_text(event.get("venue"))
+
+    if category != "culture":
+        return False
+
+    looks_like_conference = (
+        "conference" in subcategory
+        or "conference" in title
+        or "congress" in title
+        or "symposium" in title
+        or "seminar" in title
+    )
+
+    if not looks_like_conference:
+        return False
+
+    has_premium_signal = any(word in title for word in PREMIUM_EXPERIENCE_WORDS)
+    has_premium_venue = any(word in venue for word in PREMIUM_VENUE_WORDS)
+
+    if has_premium_signal or has_premium_venue:
+        return False
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        return True
+
+    return True
+
+
+def calculate_quality_adjustment(event):
+    title = clean_text(event.get("title"))
+    subcategory = clean_text(event.get("subcategory"))
+    category = clean_text(event.get("category"))
+    venue = clean_text(event.get("venue"))
+    source = clean_text(event.get("source_name"))
+
+    adjustment = 0
+
+    if any(word in title for word in PREMIUM_EXPERIENCE_WORDS):
+        adjustment += 12
+
+    if any(word in subcategory for word in ["concert", "festival", "sport", "tennis", "marathon", "theatre", "musical", "expo"]):
+        adjustment += 8
+
+    if any(word in venue for word in PREMIUM_VENUE_WORDS):
+        adjustment += 8
+
+    if source == "ticketmaster":
+        adjustment += 6
+
+    if source == "seatgeek":
+        adjustment += 8
+
+    if source == "api-football":
+        adjustment += 8
+
+    if source == "predicthq" and category == "sport":
+        adjustment += 5
+
+    if is_low_quality_conference(event):
+        adjustment -= 28
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        adjustment -= 16
+
+    # Titoli molto lunghi e tecnici tendono a essere meno adatti a un travel engine.
+    if len(title) > 85 and category == "culture":
+        adjustment -= 6
+
+    # Eventi senza venue sono meno forti, ma non vanno eliminati.
+    if not venue:
+        adjustment -= 4
+
+    return adjustment
+
+
+def apply_quality_ranking(event):
+    """
+    v17: scoring meno saturo.
+    Prima v15/v16 portava troppi eventi a 99/100. Qui separiamo segnali forti,
+    sorgente, venue, ticket/image e penalità per eventi generici/ricorrenti.
+    """
+    title = clean_text(event.get("title"))
+    venue = clean_text(event.get("venue"))
+    category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
+    source = clean_text(event.get("source_name"))
+
+    score = 55
+
+    # Sorgente: preferiamo fonti ticketabili reali.
+    if source == "ticketmaster":
+        score += 12
+    elif source == "seatgeek":
+        score += 13
+    elif source == "api-football":
+        score += 11
+    elif source == "serpapi":
+        score += 8
+    elif source == "sports expansion":
+        score += 3
+    elif source == "sports official fallback":
+        score += 1
+    elif source == "predicthq":
+        score += 4
+
+    # Prove concrete di acquistabilità/qualità.
+    if event.get("ticket_url"):
+        score += 7
+    if event.get("image_url"):
+        score += 5
+    if event.get("price_min") is not None:
+        score += 3
+    if venue:
+        score += 4
+
+    # Categoria.
+    if category == "sport":
+        score += 9
+    elif category == "concert":
+        score += 8
+    elif category == "theatre":
+        score += 7
+    elif category == "culture":
+        score += 1
+
+    if source == "serpapi" and category in ["concert", "sport", "theatre"]:
+        score += 5
+
+    # Segnali premium.
+    if any(word in title for word in ["festival", "grand prix", "final", "derby", "world cup", "champions league"]):
+        score += 10
+
+    if any(word in title for word in ["serie a", "premier league", "la liga", "nba", "nfl", "ufc", "wwe"]):
+        score += 8
+
+    if any(word in venue for word in PREMIUM_VENUE_WORDS):
+        score += 10
+
+    if any(word in title for word in BIG_MATCH_WORDS):
+        score += 5
+
+    # Rank PredictHQ, ma senza farlo dominare.
+    try:
+        rank = int(event.get("rank") or 0)
+        if rank:
+            score += min(rank // 20, 5)
+    except Exception:
+        pass
+
+    # Penalità qualità.
+    if is_low_quality_conference(event):
+        score -= 28
+
+    if any(word in title for word in LOW_QUALITY_TITLE_WORDS):
+        score -= 14
+
+    if not venue:
+        score -= 5
+
+    # PredictHQ spesso mette performer come venue: abbassiamo.
+    if source == "predicthq" and venue and normalize_event_title(venue) == normalize_event_title(title):
+        score -= 9
+
+    # Eventi troppo lunghi/generici.
+    if len(title) > 90:
+        score -= 5
+
+    if any(word in title for word in ["student innovation showcase", "weekly", "fundraiser", "conference", "seminar", "round table"]):
+        score -= 8
+
+    # Repliche note.
+    if any(word in normalize_event_title(title) for word in RECURRING_LOW_PRIORITY_TITLES):
+        score -= 6
+
+    score = max(35, min(99, int(score)))
+
+    event["ai_score"] = score
+    event["quality_score"] = score
+    event["is_low_quality_conference"] = is_low_quality_conference(event)
+
+    return event
+
+
+def filter_low_quality_events(events, category=""):
+    """
+    v15: non facciamo dump API. Togliamo eventi molto deboli e limitiamo conferenze generiche.
+    """
+    output = []
+    generic_conference_count = 0
+
+    for event in events:
+        event = apply_quality_ranking(event)
+
+        event_category = clean_text(event.get("category"))
+        title = clean_text(event.get("title"))
+
+        # Quando l'utente cerca sport/concerti/teatro, sii severo.
+        if category and event_category != clean_text(category):
+            continue
+
+        # Elimina conferenze tecniche deboli, ma tienine poche se la categoria è culture o tutte.
+        if event.get("is_low_quality_conference"):
+            generic_conference_count += 1
+
+            if generic_conference_count > 3:
+                continue
+
+            if event.get("quality_score", 0) < 62:
+                continue
+
+        # Elimina titoli manifestamente poco turistici se il punteggio è basso.
+        if any(word in title for word in LOW_QUALITY_TITLE_WORDS) and event.get("quality_score", 0) < 68:
+            continue
+
+        if event.get("quality_score", 0) < 55:
+            continue
+
+        output.append(event)
+
+    return output
+
+
+def event_quality_score(event):
+    score = event.get("ai_score") or 0
+
+    if event.get("ticket_url"):
+        score += 10
+
+    if event.get("image_url"):
+        score += 7
+
+    if event.get("venue"):
+        score += 4
+
+    source = clean_text(event.get("source_name"))
+
+    if source == "ticketmaster":
+        score += 8
+
+    if source == "seatgeek":
+        score += 9
+
+    if source == "serpapi":
+        score += 6
+
+    if source == "api-football":
+        score += 7
+
+    if source == "predicthq":
+        score += 2
+
+    if source == "sports expansion":
+        score -= 6
+
+    if source == "sports official fallback":
+        score -= 15
+
+    if event.get("eventbrite_search_url"):
+        score += 2
+
+    return score
+
+
+def canonical_sports_title(title):
+    value = normalize_event_title(title)
+
+    replacements = {
+        "gallagher prem final 2026": "premiership rugby final",
+        "premiership rugby final": "premiership rugby final",
+        "premiership rugby final tba vs tba": "premiership rugby final",
+        "autumn internationals england vs new zealand": "nations championship england new zealand",
+        "nations championship england v new zealand": "nations championship england new zealand",
+        "nfl international series indianapolis colts at washington commanders": "nfl london colts commanders",
+        "nfl london 2026 colts vs commanders register interest": "nfl london colts commanders",
+    }
+
+    for old, new in replacements.items():
+        if old in value:
+            return new
+
+    value = value.replace(" v ", " vs ")
+    value = value.replace(" versus ", " vs ")
+    value = value.replace(" register interest", "")
+    value = value.replace(" venue premium tickets", "")
+    value = re.sub(r"\s+", " ", value).strip()
+
+    return value
+
+
+def dedupe_events(events):
+    filtered = []
+
+    for event in events:
+        if should_drop_low_value_event(event):
+            continue
+        filtered.append(event)
+
+    filtered.sort(key=lambda event: (source_priority(event), event_quality_score(event)), reverse=True)
+
+    unique = []
+
+    for event in filtered:
+        title = event.get("title")
+        venue = clean_text(event.get("venue"))
+        city = clean_text(event.get("city"))
+        country = clean_text(normalize_country_code(event.get("country")))
+        start_date = clean_text(event.get("start_date"))
+        category = clean_text(event.get("category"))
+        subcategory = clean_text(event.get("subcategory"))
+        canonical_title = canonical_sports_title(title) if category == "sport" else normalize_event_title(title)
+
+        duplicate = False
+
+        for existing in unique:
+            same_date = clean_text(existing.get("start_date")) == start_date
+            same_city = clean_text(existing.get("city")) == city
+            same_country = clean_text(normalize_country_code(existing.get("country"))) == country
+            same_venue = clean_text(existing.get("venue")) == venue
+            same_subcategory = clean_text(existing.get("subcategory")) == subcategory
+            existing_category = clean_text(existing.get("category"))
+            existing_canonical_title = canonical_sports_title(existing.get("title")) if existing_category == "sport" else normalize_event_title(existing.get("title"))
+            title_similar = similar_text(title, existing.get("title")) or canonical_title == existing_canonical_title
+
+            if same_date and same_city and same_country and title_similar:
+                duplicate = True
+                break
+
+            if same_date and same_venue and title_similar:
+                duplicate = True
+                break
+
+            if category == "sport" and same_date and same_venue and same_subcategory:
+                duplicate = True
+                break
+
+        if not duplicate:
+            unique.append(event)
+
+    return unique
+
+
+def recurring_series_key(event):
+    title_key = normalize_event_title(event.get("title"))
+    venue_key = clean_text(event.get("venue"))
+    city_key = clean_text(event.get("city"))
+
+    title_key = re.sub(r"\bday\s+\d+\b", "", title_key)
+    title_key = re.sub(r"\bday\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b", "", title_key)
+    title_key = re.sub(r"\b\d+\s+day\s+pass\b", "", title_key)
+    title_key = re.sub(r"\s+", " ", title_key).strip()
+
+    series_aliases = [
+        "valorant masters london",
+        "women s world sevens football",
+        "london premier padel p1",
+        "stacey kent",
+        "mononeon",
+    ]
+
+    for alias in series_aliases:
+        if alias in title_key:
+            return f"{alias}|{venue_key}|{city_key}"
+
+    return f"{title_key}|{venue_key}|{city_key}"
+
+
+def limit_recurring_events(events, max_per_title_venue=2):
+    """
+    v28: limita repliche molto simili su date diverse e serie multi-day.
+    """
+    counts = {}
+    output = []
+
+    for event in events:
+        title_key = normalize_event_title(event.get("title"))
+        category = clean_text(event.get("category"))
+        source = clean_text(event.get("source_name"))
+        raw_title = clean_text(event.get("title"))
+
+        key = recurring_series_key(event)
+
+        recurring_words = [
+            "day 1",
+            "day 2",
+            "day 3",
+            "day 4",
+            "day 5",
+            "day 6",
+            "day one",
+            "day two",
+            "day three",
+            "spring pass",
+            "venue premium tickets",
+        ]
+
+        is_recurring_candidate = (
+            category in ["culture", "theatre", "concert", "sport", "motorsport"]
+            and source in ["predicthq", "ticketmaster", "serpapi", "sports expansion"]
+            and (
+                any(t in title_key for t in RECURRING_LOW_PRIORITY_TITLES)
+                or any(word in raw_title for word in recurring_words)
+                or "valorant masters" in title_key
+                or "world sevens football" in title_key
+                or "london premier padel p1" in title_key
+            )
+        )
+
+        if not is_recurring_candidate:
+            output.append(event)
+            continue
+
+        local_max = max_per_title_venue
+        if (
+            "valorant masters" in title_key
+            or "world sevens football" in title_key
+            or "london premier padel p1" in title_key
+        ):
+            local_max = 1
+
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] <= local_max:
+            output.append(event)
+
+    return output
+
+
+def event_is_in_range(event, from_date="", to_date=""):
+    start_date = event.get("start_date")
+
+    if not start_date:
+        return False
+
+    if from_date and start_date < from_date:
+        return False
+
+    if to_date and start_date > to_date:
+        return False
+
+    return True
+
+
+def get_best_image(images):
+    if not images:
+        return None
+
+    sorted_images = sorted(
+        images,
+        key=lambda img: (img.get("width", 0) * img.get("height", 0)),
+        reverse=True
+    )
+
+    return sorted_images[0].get("url")
+
+
+def infer_sport_subcategory(title, city="", country=""):
+    title_clean = clean_text(title)
+    city_clean = clean_text(city)
+    country_code = clean_text(normalize_country_code(country))
+
+    if "wwe" in title_clean or "wrestling" in title_clean:
+        return "Wrestling"
+
+    if "marathon" in title_clean or "half marathon" in title_clean:
+        return "Marathon"
+
+    if "internazionali bnl" in title_clean or "tennis" in title_clean or "atp" in title_clean or "wta" in title_clean:
+        return "Tennis"
+
+    if "formula 1" in title_clean or "grand prix" in title_clean or "motogp" in title_clean:
+        return "Motorsport"
+
+    if "nba" in title_clean or "basketball" in title_clean or "basket" in title_clean:
+        return "Basketball"
+
+    if "rugby" in title_clean or "six nations" in title_clean:
+        return "Rugby"
+
+    if "serie a" in title_clean:
+        return "Serie A"
+
+    if country_code == "it" and any(word in title_clean for word in ITALIAN_FOOTBALL_WORDS):
+        return "Serie A"
+
+    if "premier league" in title_clean:
+        return "Premier League"
+
+    if "la liga" in title_clean:
+        return "La Liga"
+
+    if "bundesliga" in title_clean:
+        return "Bundesliga"
+
+    if "ligue 1" in title_clean:
+        return "Ligue 1"
+
+    if " vs " in title_clean or " v " in title_clean:
+        if city_clean in ["roma", "rome"] and any(team in title_clean for team in ROME_FOOTBALL_TEAMS):
+            return "Serie A"
+        return "Football"
+
+    return "Sport"
+
+
+def clean_sport_title(title):
+    if not title:
+        return title
+
+    value = title.strip()
+
+    replacements = {
+        "Lazio Rome": "Lazio",
+        "AS Roma Rome": "AS Roma",
+        "Roma Rome": "Roma",
+        " BC": "",
+        " Calcio": "",
+    }
+
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+
+    value = re.sub(r"\s+", " ", value).strip()
+
+    return value
+
+
+def infer_sport_venue(title, city="", venue=""):
+    title_clean = clean_text(title)
+    city_clean = clean_text(city)
+    venue_clean = clean_text(venue)
+
+    if "marathon" in title_clean or "half marathon" in title_clean:
+        return "Rome city center" if city_clean in ["roma", "rome"] else (venue or "City center")
+
+    if "internazionali bnl" in title_clean or "tennis" in title_clean:
+        if city_clean in ["roma", "rome"]:
+            return "Foro Italico"
+        return venue or ""
+
+    if "wwe" in title_clean or "wrestling" in title_clean:
+        if venue_clean and venue_clean not in ["lazio rome", "ss lazio", "as roma"]:
+            return venue
+        return city or ""
+
+    if city_clean in ["roma", "rome"]:
+        if any(team in title_clean for team in ROME_FOOTBALL_TEAMS):
+            return "Stadio Olimpico"
+
+    if venue_clean in ["lazio rome", "ss lazio", "as roma", "roma", "rome"]:
+        return ""
+
+    return venue
+
+
+def build_ticket_search_url(event):
+    title = str(event.get("title") or "")
+    city = str(event.get("city") or "")
+    country = str(event.get("country") or "")
+    start_date = str(event.get("start_date") or "")
+    subcategory = str(event.get("subcategory") or "")
+
+    search_terms = [
+        title,
+        subcategory,
+        city,
+        country,
+        start_date,
+        "official tickets",
+    ]
+
+    query = " ".join([term for term in search_terms if term]).strip()
+
+    if not query:
+        return None
+
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
+def build_eventbrite_search_url(event=None, city="", country=""):
+    """
+    v14 fallback Eventbrite: non chiama API, crea link utile di ricerca pubblica.
+    """
+    if event:
+        city = event.get("city") or city
+        country = event.get("country") or country
+        query = event.get("title") or ""
+    else:
+        query = ""
+
+    normalized_city = normalize_city(city or "")
+    country_code = normalize_country_code(country or "")
+    country_slug = COUNTRY_NAME_MAP.get(country_code, (country_code or "events").lower())
+
+    city_slug = clean_text(normalized_city).replace(" ", "-")
+    if not city_slug:
+        city_slug = "events"
+
+    base = f"https://www.eventbrite.com/d/{country_slug}--{city_slug}/"
+
+    if query:
+        return base + "?q=" + quote_plus(query)
+
+    return base
+
+
+def enhance_predicthq_event(event):
+    if clean_text(event.get("source_name")) != "predicthq":
+        return event
+
+    if event.get("category") != "sport":
+        return event
+
+    title = event.get("title") or ""
+    city = event.get("city") or ""
+    country = event.get("country") or ""
+    venue = event.get("venue") or ""
+
+    cleaned_title = clean_sport_title(title)
+    subcategory = infer_sport_subcategory(cleaned_title, city, country)
+    cleaned_venue = infer_sport_venue(cleaned_title, city, venue)
+
+    event["title"] = cleaned_title
+    event["subcategory"] = subcategory
+    event["venue"] = cleaned_venue or venue
+
+    if subcategory in ["Serie A", "Premier League", "La Liga", "Bundesliga", "Ligue 1", "Football"]:
+        event["sport_type"] = "Football"
+    elif subcategory == "Tennis":
+        event["sport_type"] = "Tennis"
+    elif subcategory == "Marathon":
+        event["sport_type"] = "Running"
+    elif subcategory == "Wrestling":
+        event["sport_type"] = "Wrestling"
+    else:
+        event["sport_type"] = "Sport"
+
+    event["ticket_url"] = build_ticket_search_url(event)
+
+    return event
+
+
+def enhance_eventbrite_fallback(event):
+    """
+    Aggiunge un link Eventbrite pubblico ai risultati PredictHQ/Ticketmaster senza fare chiamate API Eventbrite.
+    """
+    if event.get("category") in ["culture", "concert", "theatre"]:
+        event["eventbrite_search_url"] = build_eventbrite_search_url(event=event)
+    return event
+
+
+def calculate_ai_score(event):
+    score = 60
+
+    title = clean_text(event.get("title"))
+    venue = clean_text(event.get("venue"))
+    category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
+    source_name = clean_text(event.get("source_name"))
+
+    premium_words = [
+        "final",
+        "grand prix",
+        "formula 1",
+        "championship",
+        "broadway",
+        "nba",
+        "nhl",
+        "nfl",
+        "ufc",
+        "wimbledon",
+        "world cup",
+        "derby",
+        "concert",
+        "festival",
+        "musical",
+        "premier league",
+        "champions league",
+        "serie a",
+        "la liga",
+        "j league",
+        "npb",
+        "arsenal",
+        "chelsea",
+        "tottenham",
+        "liverpool",
+        "manchester",
+        "roma",
+        "lazio",
+        "inter",
+        "milan",
+        "real madrid",
+        "barcelona",
+        "psg",
+        "bayern",
+        "internazionali bnl",
+        "marathon",
+        "wwe",
+        "startup",
+        "networking",
+        "conference",
+        "festival",
+    ]
+
+    iconic_venues = [
+        "wembley",
+        "madison square garden",
+        "royal albert hall",
+        "o2 arena",
+        "tokyo dome",
+        "broadway",
+        "stadio olimpico",
+        "san siro",
+        "camp nou",
+        "santiago bernabeu",
+        "auditorium parco della musica",
+        "maracana",
+        "la bombonera",
+        "emirates stadium",
+        "stamford bridge",
+        "tottenham hotspur stadium",
+        "parc des princes",
+        "allianz arena",
+        "foro italico",
+    ]
+
+    premium_subcategories = [
+        "serie a",
+        "premier league",
+        "la liga",
+        "bundesliga",
+        "ligue 1",
+        "champions league",
+        "tennis",
+        "motorsport",
+        "wrestling",
+        "marathon",
+        "conference",
+        "business",
+        "nightlife",
+        "food & drink",
+        "festival",
+    ]
+
+    premium_word_bonus = 0
+    for word in premium_words:
+        if word in title:
+            premium_word_bonus += 3
+    score += min(premium_word_bonus, 15)
+
+    venue_bonus = 0
+    for place in iconic_venues:
+        if place in venue:
+            venue_bonus += 5
+    score += min(venue_bonus, 8)
+
+    for item in premium_subcategories:
+        if item in subcategory:
+            score += 8
+            break
+
+    if category in ["sport", "motorsport", "horse_racing", "concert", "theatre", "culture"]:
+        score += 4
+
+    if source_name == "ticketmaster":
+        score += 5
+
+    if source_name == "seatgeek":
+        score += 7
+
+    if source_name == "serpapi":
+        score += 5
+
+    if source_name == "api-football":
+        score += 7
+
+    if source_name == "predicthq":
+        rank = event.get("rank")
+        try:
+            if rank:
+                score += min(int(rank) // 15, 7)
+        except Exception:
+            pass
+
+    if any(word in title for word in BIG_MATCH_WORDS):
+        score += 4
+
+    if "ac milan" in title or "inter" in title or "juventus" in title or "napoli" in title:
+        score += 4
+
+    if "internazionali bnl" in title:
+        score += 5
+
+    if "marathon" in title:
+        score += 3
+
+    if "final" in title or "derby" in title:
+        score += 6
+
+    return min(score, 98)
+
+
+
+def normalize_seatgeek_type(category):
+    if category == "sport":
+        return "sports"
+    if category == "concert":
+        return "concert"
+    if category == "theatre":
+        return "theater"
+    if category == "culture":
+        return ""
+    return ""
+
+
+def get_seatgeek_geo(city="", country=""):
+    city_key = get_football_city_key(city, country)
+    return SEATGEEK_CITY_GEO.get(city_key, "")
+
+
+def parse_seatgeek_datetime(value):
+    if not value:
+        return "", None
+
+    # SeatGeek normalmente ritorna datetime_local tipo 2026-06-12T20:00:00
+    start_date = value[:10] if len(value) >= 10 else ""
+    start_time = value[11:19] if len(value) >= 19 else None
+    return start_date, start_time
+
+
+def read_http_error_body(exc):
+    try:
+        return exc.read().decode("utf-8")
+    except Exception:
+        return ""
+
+
+def get_seatgeek_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not SEATGEEK_CLIENT_ID:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    geo = get_seatgeek_geo(city, country)
+
+    params = {
+        "client_id": SEATGEEK_CLIENT_ID,
+        "per_page": min(size, 50),
+        "sort": "datetime_local.asc",
+    }
+
+    # v17: SeatGeek public events endpoint usa client_id. Non inviamo il secret nella query.
+    # Alcuni account ricevono 403 se il secret viene passato come parametro.
+    if geo:
+        params["lat"] = geo.split(",")[0]
+        params["lon"] = geo.split(",")[1]
+        params["range"] = "50mi"
+    elif normalized_city:
+        params["venue.city"] = normalized_city
+
+    sg_type = normalize_seatgeek_type(category)
+    if sg_type:
+        params["type"] = sg_type
+
+    if from_date:
+        params["datetime_local.gte"] = f"{from_date}T00:00:00"
+
+    if to_date:
+        params["datetime_local.lte"] = f"{to_date}T23:59:59"
+
+    url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        print("SeatGeek HTTP error:", exc.code, read_http_error_body(exc))
+        return []
+    except Exception as exc:
+        print("SeatGeek error:", exc)
+        return []
+
+    raw_events = data.get("events", [])
+    events = []
+
+    for item in raw_events:
+        title = item.get("title") or item.get("short_title") or "Unknown event"
+        start_date, start_time = parse_seatgeek_datetime(item.get("datetime_local") or item.get("datetime_utc"))
+
+        if not start_date:
+            continue
+
+        venue = item.get("venue") or {}
+        city_name = venue.get("city") or normalized_city
+        country_name = venue.get("country") or country_code
+        venue_name = venue.get("name") or ""
+
+        if normalized_city and city_name:
+            if clean_text(normalized_city) not in clean_text(city_name) and clean_text(city_name) not in city_aliases_for(normalized_city):
+                continue
+
+        performers = item.get("performers") or []
+        image_url = None
+        if performers:
+            image_url = (
+                performers[0].get("image")
+                or performers[0].get("images", {}).get("huge")
+                or performers[0].get("images", {}).get("large")
+            )
+
+        stats = item.get("stats") or {}
+        price_min = stats.get("lowest_price")
+        price_max = stats.get("highest_price")
+
+        taxonomies = item.get("taxonomies") or []
+        taxonomy_names = " ".join([str(t.get("name") or "") for t in taxonomies])
+        mapped_category = normalize_category(taxonomy_names or item.get("type") or "")
+
+        # SeatGeek usa "theater"; normalizziamo meglio.
+        if "theater" in clean_text(item.get("type")) or "theater" in clean_text(taxonomy_names):
+            mapped_category = "theatre"
+
+        if category and mapped_category != category:
+            # sport/concert/theatre sono severi; culture può includere theatre/concert.
+            if not (category == "culture" and mapped_category in ["culture", "theatre", "concert"]):
+                continue
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": item.get("type") or taxonomy_names or "SeatGeek event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "SeatGeek",
+            "source_url": item.get("url"),
+            "ticket_url": item.get("url"),
+            "image_url": image_url,
+            "price_min": price_min,
+            "price_max": price_max,
+            "currency": "USD" if country_code == "US" else None,
+            "is_vip_available": False,
+            "status": "active",
+            "seatgeek_score": item.get("score"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event = enhance_eventbrite_fallback(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def build_debug_seatgeek_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    geo = get_seatgeek_geo(city, country)
+
+    params = {
+        "client_id": "***" if SEATGEEK_CLIENT_ID else "",
+        "per_page": 5,
+        "sort": "datetime_local.asc",
+    }
+
+    if geo:
+        params["lat"] = geo.split(",")[0]
+        params["lon"] = geo.split(",")[1]
+        params["range"] = "50mi"
+    elif normalized_city:
+        params["venue.city"] = normalized_city
+
+    sg_type = normalize_seatgeek_type(category)
+    if sg_type:
+        params["type"] = sg_type
+
+    if from_date:
+        params["datetime_local.gte"] = f"{from_date}T00:00:00"
+
+    if to_date:
+        params["datetime_local.lte"] = f"{to_date}T23:59:59"
+
+    real_params = dict(params)
+    if SEATGEEK_CLIENT_ID:
+        real_params["client_id"] = SEATGEEK_CLIENT_ID
+    # v17: debug con client_id only. Il secret resta su Render ma non viene inviato.
+    url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(real_params)
+
+    if not SEATGEEK_CLIENT_ID:
+        return {
+            "seatgeek_client_id_present": False,
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "error": "missing SEATGEEK_CLIENT_ID",
+        }
+
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        sample = []
+        for item in data.get("events", [])[:5]:
+            venue = item.get("venue") or {}
+            sample.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "type": item.get("type"),
+                "datetime_local": item.get("datetime_local"),
+                "venue": venue.get("name"),
+                "city": venue.get("city"),
+                "country": venue.get("country"),
+                "url": item.get("url"),
+            })
+
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": True,
+            "status_code": status_code,
+            "request_url": safe_url,
+            "events_count": len(data.get("events", [])),
+            "meta": data.get("meta"),
+            "sample": sample,
+        }
+
+    except HTTPError as exc:
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "seatgeek_auth_mode": "client_id_only",
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "status_code": exc.code,
+            "error": str(exc),
+            "error_body": read_http_error_body(exc),
+            "request_url": safe_url,
+        }
+    except Exception as exc:
+        safe_url = SEATGEEK_API_BASE_URL.rstrip("/") + "/events?" + urlencode(params)
+        return {
+            "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+            "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+            "seatgeek_auth_mode": "client_id_only",
+            "base_url": SEATGEEK_API_BASE_URL,
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code, "geo": geo},
+            "ok": False,
+            "error": str(exc),
+            "request_url": safe_url,
+        }
+
+
+
+def month_year_terms(from_date="", to_date=""):
+    months = [
+        "", "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ]
+
+    terms = []
+
+    for value in [from_date, to_date]:
+        try:
+            year = int(value[:4])
+            month = int(value[5:7])
+            if 1 <= month <= 12:
+                label = f"{months[month]} {year}"
+                if label not in terms:
+                    terms.append(label)
+        except Exception:
+            pass
+
+    if from_date and to_date and from_date[:4] == to_date[:4]:
+        year = from_date[:4]
+        if year not in terms:
+            terms.append(year)
+
+    return " ".join(terms)
+
+
+def build_serpapi_query(city="", country="", category="", from_date="", to_date=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    category_terms = SERPAPI_CATEGORY_QUERY_MAP.get(category, SERPAPI_CATEGORY_QUERY_MAP.get("", "events"))
+    date_terms = month_year_terms(from_date, to_date)
+
+    parts = [
+        category_terms,
+        normalized_city,
+        country_name,
+        date_terms,
+    ]
+
+    return " ".join([str(part).strip() for part in parts if str(part).strip()])
+
+
+def build_serpapi_query_variants(city="", country="", category="", from_date="", to_date=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    date_terms = month_year_terms(from_date, to_date)
+
+    base_category = SERPAPI_CATEGORY_QUERY_MAP.get(category, "events")
+    variants = []
+
+    def add(q):
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in variants:
+            variants.append(q)
+
+    # Google Events spesso restituisce zero se mettiamo "from YYYY-MM-DD to YYYY-MM-DD".
+    # v20 usa query più naturali e riprova più varianti.
+    add(f"{base_category} {normalized_city} {country_name} {date_terms}")
+    add(f"events {normalized_city} {country_name} {date_terms}")
+
+    if not category:
+        add(f"concerts festivals {normalized_city} {country_name} {date_terms}")
+        add(f"sports events {normalized_city} {country_name} {date_terms}")
+        add(f"exhibitions shows {normalized_city} {country_name} {date_terms}")
+
+    if country_code == "JP":
+        add(f"Tokyo events Japan {date_terms} official tickets")
+        add(f"Tokyo concerts festivals Japan {date_terms}")
+        add(f"Tokyo sports events Japan {date_terms}")
+
+    return variants[:5]
+
+
+def parse_serpapi_date(date_info, fallback_from_date=""):
+    """
+    SerpApi Google Events può restituire date in forme diverse:
+    - {"start_date": "May 22", "when": "..."}
+    - stringhe dentro "date"
+    Qui facciamo best-effort. Se non riusciamo a parsare l'anno, usiamo l'anno di fallback.
+    """
+    if not date_info:
+        return "", None
+
+    year = ""
+    if fallback_from_date and len(fallback_from_date) >= 4:
+        year = fallback_from_date[:4]
+    else:
+        year = str(datetime.now(timezone.utc).year)
+
+    if isinstance(date_info, dict):
+        raw = (
+            date_info.get("start_date")
+            or date_info.get("when")
+            or date_info.get("date")
+            or ""
+        )
+    else:
+        raw = str(date_info)
+
+    raw = str(raw or "").strip()
+    if not raw:
+        return "", None
+
+    # Già ISO.
+    iso_match = re.search(r"(20\d{2})-(\d{2})-(\d{2})", raw)
+    if iso_match:
+        return iso_match.group(0), None
+
+    months = {
+        "jan": "01", "january": "01",
+        "feb": "02", "february": "02",
+        "mar": "03", "march": "03",
+        "apr": "04", "april": "04",
+        "may": "05",
+        "jun": "06", "june": "06",
+        "jul": "07", "july": "07",
+        "aug": "08", "august": "08",
+        "sep": "09", "sept": "09", "september": "09",
+        "oct": "10", "october": "10",
+        "nov": "11", "november": "11",
+        "dec": "12", "december": "12",
+    }
+
+    # Esempi: "May 22", "May 22, 2026", "Fri, May 22"
+    lower = raw.lower().replace(",", " ")
+    parts = re.split(r"\s+", lower)
+
+    found_month = ""
+    found_day = ""
+    found_year = ""
+
+    for i, part in enumerate(parts):
+        cleaned = re.sub(r"[^a-z0-9]", "", part)
+        if cleaned in months:
+            found_month = months[cleaned]
+            # Cerca giorno nei token successivi
+            for candidate in parts[i + 1:i + 4]:
+                day = re.sub(r"[^0-9]", "", candidate)
+                if day and 1 <= int(day[:2]) <= 31:
+                    found_day = day[:2].zfill(2)
+                    break
+
+    for part in parts:
+        maybe_year = re.sub(r"[^0-9]", "", part)
+        if len(maybe_year) == 4 and maybe_year.startswith("20"):
+            found_year = maybe_year
+            break
+
+    if found_month and found_day:
+        return f"{found_year or year}-{found_month}-{found_day}", None
+
+    return "", None
+
+
+def get_serpapi_event_link(item):
+    link = item.get("link") or item.get("event_location_map", {}).get("link")
+    if link:
+        return link
+
+    title = item.get("title") or ""
+    address = " ".join(item.get("address") or [])
+    query = " ".join([title, address, "tickets"]).strip()
+    if query:
+        return "https://www.google.com/search?" + urlencode({"q": query})
+
+    return None
+
+
+def infer_serpapi_category(title="", description="", category="", venue=""):
+    if category:
+        return category
+
+    text = clean_text(f"{title} {description} {venue}")
+
+    concert_words = [
+        "concert", "music", "festival", "dj", "live music", "band", "tour",
+        "billboard live", "spotify", "j-pop", "k-pop", "rock", "jazz",
+        "orchestra", "singer", "album", "live tour"
+    ]
+
+    sport_words = [
+        "football", "soccer", "basketball", "baseball", "rugby", "tennis",
+        "match", "game", "sumo", "tournament", "j.league", "npb", "b.league",
+        "marathon", "race", "grand prix"
+    ]
+
+    theatre_words = [
+        "theatre", "theater", "musical", "opera", "show", "performing arts",
+        "ballet", "stage"
+    ]
+
+    if any(word in text for word in concert_words):
+        return "concert"
+
+    if any(word in text for word in sport_words):
+        return "sport"
+
+    if any(word in text for word in theatre_words):
+        return "theatre"
+
+    return "culture"
+
+
+def infer_serpapi_subcategory(title="", description="", category="", venue=""):
+    text = clean_text(f"{title} {description} {venue}")
+    mapped_category = infer_serpapi_category(title, description, category, venue)
+
+    if mapped_category == "concert":
+        if "j-pop" in text or "jpop" in text or "kaientai" in text or "may j" in text:
+            return "J-Pop"
+        if "k-pop" in text or "kpop" in text:
+            return "K-Pop"
+        if "jazz" in text:
+            return "Jazz"
+        if "festival" in text:
+            return "Festival"
+        return "Concert"
+
+    if mapped_category == "sport":
+        if "sumo" in text:
+            return "Sumo"
+        if "baseball" in text or "npb" in text:
+            return "Baseball"
+        if "football" in text or "soccer" in text or "j.league" in text:
+            return "Football"
+        if "tennis" in text:
+            return "Tennis"
+        return "Sport"
+
+    if mapped_category == "theatre":
+        if "musical" in text:
+            return "Musical"
+        if "opera" in text:
+            return "Opera"
+        return "Theatre"
+
+    return "Culture"
+
+def call_serpapi_google_events(query_text, country_code=""):
+    params = {
+        "engine": "google_events",
+        "q": query_text,
+        "api_key": SERPAPI_API_KEY,
+        "hl": "en",
+        "gl": (country_code or "US").lower(),
+    }
+
+    url = SERPAPI_API_BASE_URL + "?" + urlencode(params)
+    safe_params = dict(params)
+    safe_params["api_key"] = "***"
+    safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    with urlopen(request, timeout=25) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    return data, safe_url
+
+
+def requested_sport_terms(category="", query_hint=""):
+    text = clean_text(f"{category} {query_hint}")
+    terms = []
+
+    def add(term):
+        if term not in terms:
+            terms.append(term)
+
+    if any(word in text for word in ["boxe", "boxing", "fight", "pugilato"]):
+        add("boxing")
+    if any(word in text for word in ["mma", "ufc", "combat", "one championship", "pfl"]):
+        add("mma")
+    if any(word in text for word in ["nfl", "football americano", "american football"]):
+        add("nfl")
+    if any(word in text for word in ["motogp", "moto gp", "motorcycle grand prix", "motomondiale"]):
+        add("motogp")
+    if any(word in text for word in ["formula 1", "formula1", "f1", "grand prix"]):
+        add("formula1")
+    if "nascar" in text:
+        add("nascar")
+    if "rugby" in text:
+        add("rugby")
+    if "tennis" in text:
+        add("tennis")
+    if any(word in text for word in ["basket", "basketball", "nba"]):
+        add("basketball")
+    if any(word in text for word in ["baseball", "mlb", "npb"]):
+        add("baseball")
+    if any(word in text for word in ["hockey", "nhl"]):
+        add("hockey")
+
+    if category in ["sport", "motorsport"]:
+        defaults = ["boxing", "mma", "nfl", "motogp", "formula1", "rugby", "tennis", "basketball", "baseball", "hockey"]
+        for term in defaults:
+            add(term)
+
+    return terms[:10]
+
+
+def sports_year_terms(from_date="", to_date=""):
+    years = []
+    for value in [from_date, to_date]:
+        if value and len(value) >= 4 and value[:4].isdigit():
+            if value[:4] not in years:
+                years.append(value[:4])
+    if not years:
+        years.append(str(datetime.now(timezone.utc).year))
+    return " ".join(years)
+
+
+def build_sports_expansion_queries(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
+    year_terms = sports_year_terms(from_date, to_date)
+    city_key = get_football_city_key(normalized_city, country_code)
+
+    terms = requested_sport_terms(category or "sport")
+    queries = []
+
+    def add(q):
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in queries:
+            queries.append(q)
+
+    # v24: query più corte. Google Events spesso restituisce zero con range lunghi tipo
+    # "January 2026 December 2026 2026".
+    for hint in SPORTS_EXPANSION_CITY_HINTS.get(city_key, [])[:8]:
+        add(f"{hint} {year_terms}")
+        add(f"{hint} tickets {year_terms}")
+
+    for term in terms:
+        config = SPORTS_EXPANSION_KEYWORDS.get(term)
+        if not config:
+            continue
+
+        subcategory = config.get("subcategory", "")
+        add(f"{subcategory} {normalized_city} {year_terms}")
+        add(f"{subcategory} tickets {normalized_city} {year_terms}")
+
+        for base in config.get("queries", [])[:2]:
+            add(f"{base} {normalized_city} {year_terms}")
+
+    if category == "sport":
+        add(f"sports events {normalized_city} {year_terms}")
+        add(f"sports tickets {normalized_city} {year_terms}")
+        add(f"{normalized_city} stadium events {year_terms}")
+
+    if category == "motorsport":
+        add(f"Formula 1 Grand Prix {country_name} {year_terms}")
+        add(f"F1 tickets {country_name} {year_terms}")
+        add(f"MotoGP Grand Prix {country_name} {year_terms}")
+        add(f"MotoGP tickets {country_name} {year_terms}")
+
+    return queries[:20]
+
+
+def infer_sports_expansion_type(title="", description="", venue=""):
+    text = clean_text(f"{title} {description} {venue}")
+
+    if any(word in text for word in ["boxing", "boxe", "fight night", "championship boxing", "box cup"]):
+        return "sport", "Boxing"
+    if any(word in text for word in ["ufc", "mma", "pfl", "one championship", "ultra-mma"]):
+        return "sport", "MMA"
+    if any(word in text for word in ["nfl", "american football", "international series"]):
+        return "sport", "NFL"
+    if any(word in text for word in ["rugby", "twickenham", "premiership", "barbarians", "challenge cup", "nations championship"]):
+        return "sport", "Rugby"
+    if any(word in text for word in ["fa cup", "efl", "play-off final", "play off final", "football", "chelsea", "manchester city"]):
+        return "sport", "Football"
+    if any(word in text for word in ["motogp", "moto gp", "motorcycle grand prix"]):
+        return "motorsport", "MotoGP"
+    if any(word in text for word in ["formula 1", "f1", "grand prix"]):
+        return "motorsport", "Formula 1"
+    if "nascar" in text:
+        return "motorsport", "NASCAR"
+    if "tennis" in text or "atp" in text or "wta" in text:
+        return "sport", "Tennis"
+    if "basketball" in text or "nba" in text:
+        return "sport", "Basketball"
+    if "netball" in text:
+        return "sport", "Netball"
+    if "baseball" in text or "mlb" in text or "npb" in text:
+        return "sport", "Baseball"
+    if "hockey" in text or "nhl" in text:
+        return "sport", "Hockey"
+    if "wwe" in text or "wrestling" in text:
+        return "sport", "Wrestling"
+
+    return "sport", "Sport"
+
+
+def build_sports_ticket_search_url(title="", city="", country="", from_date="", to_date="", subcategory=""):
+    query = " ".join([
+        str(title or ""),
+        str(subcategory or ""),
+        str(city or ""),
+        str(country or ""),
+        str(from_date or ""),
+        str(to_date or ""),
+        "official tickets schedule",
+    ]).strip()
+    return "https://www.google.com/search?" + urlencode({"q": query})
+
+
+def sports_address_matches_city(address_parts, requested_city="", requested_country=""):
+    requested_city_clean = clean_text(normalize_city(requested_city))
+    address_text = clean_text(" ".join([str(part) for part in (address_parts or [])]))
+
+    if not requested_city_clean:
+        return True
+
+    metro_aliases = {
+        "london": ["london", "wembley", "twickenham", "tottenham", "stratford", "greenwich"],
+        "new york": ["new york", "brooklyn", "queens", "bronx", "manhattan", "newark", "east rutherford", "flushing"],
+        "las vegas": ["las vegas", "paradise", "henderson"],
+        "paris": ["paris", "saint-denis", "nanterre", "boulogne"],
+        "madrid": ["madrid", "leganes", "alcala"],
+        "barcelona": ["barcelona", "montmelo", "badalona"],
+        "rome": ["rome", "roma"],
+        "milan": ["milan", "milano", "monza"],
+        "tokyo": ["tokyo", "saitama", "yokohama", "chiba", "kawasaki"],
+        "toronto": ["toronto", "mississauga", "scarborough"],
+        "shanghai": ["shanghai"],
+        "são paulo": ["são paulo", "sao paulo", "interlagos"],
+        "buenos aires": ["buenos aires"],
+    }
+
+    aliases = metro_aliases.get(requested_city_clean, city_aliases_for(requested_city_clean))
+    return any(alias and alias in address_text for alias in aliases)
+
+
+def sports_result_is_relevant(item, query_text="", subcategory=""):
+    title = clean_text(item.get("title"))
+    description = clean_text(item.get("description"))
+    link = clean_text(item.get("link"))
+    query = clean_text(query_text)
+    text = f"{title} {description} {link} {query} {clean_text(subcategory)}"
+
+    # v26: domini musicali/non sportivi bloccati prima delle parole sportive.
+    bad_domains = [
+        "open.spotify.com",
+        "spotify.com",
+        "dice.fm",
+        "gigtotem.com/listings",
+    ]
+    if any(domain in link for domain in bad_domains):
+        return False
+
+    bad_link_words = ["harry-styles", "/concert/", "concert/", "album", "tour"]
+    if any(word in link for word in bad_link_words):
+        strong_sport_title_words = [
+            "boxing", "fight night", "rugby", "nfl", "fa cup", "play-off",
+            "premiership", "championship", "wwe", "ufc", "grand prix",
+            "challenge cup", "barbarians",
+        ]
+        if not any(word in title for word in strong_sport_title_words):
+            return False
+
+    fan_zone_words = ["fanzone", "fan zone", "watch party", "viewing party"]
+    if any(word in title for word in fan_zone_words):
+        return False
+
+    sport_words = [
+        "boxing", "boxe", "fight", "championship boxing", "box cup",
+        "mma", "ufc", "ultra-mma", "one championship", "pfl",
+        "nfl", "american football", "football team", "international series",
+        "rugby", "premiership rugby", "nations championship", "twickenham",
+        "tennis", "atp", "wta", "grand slam",
+        "basketball", "nba", "netball",
+        "baseball", "mlb", "npb",
+        "hockey", "nhl",
+        "formula 1", "f1", "grand prix", "motogp", "nascar",
+        "fa cup", "play-off final", "stadium", "wwe", "wrestling",
+        "barbarians", "challenge cup",
+    ]
+
+    if any(word in text for word in sport_words):
+        return True
+
+    music_like_words = ["concert", "tour", "album", "spotify", "band", "dj", "singer"]
+    if any(word in title for word in music_like_words):
+        return False
+
+    return False
+
+
+def get_sports_expansion_events(city="", country="", from_date="", to_date="", category="", size=30):
+    if not SERPAPI_API_KEY:
+        return []
+
+    if category not in ["sport", "motorsport", ""]:
+        return []
+
+    normalized_city, country_code = normalize_request_location(city, country)
+    queries = build_sports_expansion_queries(normalized_city, country_code, from_date, to_date, category or "sport")
+    events = []
+    seen = set()
+
+    for query_text in queries:
+        try:
+            data, safe_url = call_serpapi_google_events(query_text, country_code)
+        except HTTPError as exc:
+            print("Sports Expansion SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+            continue
+        except Exception as exc:
+            print("Sports Expansion SerpApi error:", exc)
+            continue
+
+        for item in (data.get("events_results", []) or []):
+            title = item.get("title") or "Unknown sports event"
+            description = item.get("description") or ""
+            start_date, start_time = parse_serpapi_date(item.get("date") or {}, from_date)
+
+            if not start_date:
+                continue
+            if from_date and start_date < from_date:
+                continue
+            if to_date and start_date > to_date:
+                continue
+
+            address_parts = item.get("address") or []
+
+            if not sports_address_matches_city(address_parts, normalized_city, country_code):
+                title_clean = clean_text(title)
+                if not (
+                    category == "motorsport"
+                    and any(term in title_clean for term in ["grand prix", "motogp", "formula 1", "f1"])
+                ):
+                    continue
+
+            address_text = ", ".join([str(part) for part in address_parts if part])
+            venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
+            if not venue:
+                venue = address_parts[0] if address_parts else ""
+
+            mapped_category, subcategory = infer_sports_expansion_type(title, description, venue or address_text)
+
+            if not sports_result_is_relevant(item, query_text, subcategory):
+                continue
+
+            raw_key = f"{normalize_event_title(title)}|{start_date}|{venue}|{subcategory}"
+            if raw_key in seen:
+                continue
+            seen.add(raw_key)
+
+            event = {
+                "title": title,
+                "category": mapped_category,
+                "subcategory": subcategory,
+                "start_date": start_date,
+                "start_time": start_time,
+                "city": normalized_city,
+                "country": country_code,
+                "venue": venue or address_text,
+                "source_name": "Sports Expansion",
+                "source_url": get_serpapi_event_link(item),
+                "ticket_url": get_serpapi_event_link(item) or build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
+                "image_url": item.get("thumbnail"),
+                "price_min": None,
+                "price_max": None,
+                "currency": None,
+                "is_vip_available": False,
+                "status": "active",
+                "sports_expansion_query": query_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            event["ai_score"] = calculate_ai_score(event)
+            if "apply_quality_ranking" in globals():
+                event = apply_quality_ranking(event)
+            events.append(event)
+
+            if len(events) >= size:
+                return events
+
+    return events
+
+
+def get_sports_official_fallback_events(city="", country="", from_date="", to_date="", category="", size=8):
+    normalized_city, country_code = normalize_request_location(city, country)
+    if category not in ["sport", "motorsport", ""]:
+        return []
+
+    terms = requested_sport_terms(category or "sport")
+    if not terms:
+        terms = ["boxing", "mma", "nfl", "motogp", "formula1"]
+
+    events = []
+    start_date = from_date or datetime.now(timezone.utc).date().isoformat()
+    year_terms = sports_year_terms(from_date, to_date)
+
+    for term in terms[:size]:
+        config = SPORTS_EXPANSION_KEYWORDS.get(term)
+        if not config:
+            continue
+
+        subcategory = config.get("subcategory", "Sport")
+        official_sources = config.get("official_sources", [])
+        source_names = " / ".join(official_sources)
+
+        title = f"{subcategory} events, schedule and ticket sources"
+        search_query = f"{subcategory} {normalized_city} {country_code} {year_terms} official schedule tickets {' '.join(official_sources)}"
+        search_url = "https://www.google.com/search?" + urlencode({"q": search_query})
+
+        event = {
+            "title": title,
+            "category": config.get("category", "sport"),
+            "subcategory": subcategory,
+            "start_date": start_date,
+            "start_time": None,
+            "city": normalized_city,
+            "country": country_code,
+            "venue": source_names or "Official sports sources",
+            "source_name": "Sports Official Fallback",
+            "source_url": search_url,
+            "ticket_url": search_url,
+            "image_url": None,
+            "price_min": None,
+            "price_max": None,
+            "currency": None,
+            "is_vip_available": False,
+            "status": "fallback",
+            "official_sources": official_sources,
+            "ai_score": 68,
+            "quality_score": 68,
+            "is_low_quality_conference": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        events.append(event)
+
+    return events
+
+
+def build_debug_sports_expansion_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    queries = build_sports_expansion_queries(normalized_city, country_code, from_date, to_date, category or "sport")
+
+    attempts = []
+    total_events = 0
+
+    if not SERPAPI_API_KEY:
+        return {
+            "serpapi_api_key_present": False,
+            "ok": False,
+            "error": "missing SERPAPI_API_KEY",
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "queries": queries,
+        }
+
+    for query_text in queries[:20]:
+        safe_params = {
+            "engine": "google_events",
+            "q": query_text,
+            "api_key": "***",
+            "hl": "en",
+            "gl": (country_code or "US").lower(),
+        }
+        safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+
+        try:
+            data, _ = call_serpapi_google_events(query_text, country_code)
+            raw_events = data.get("events_results", []) or []
+            total_events += len(raw_events)
+            sample = []
+
+            for item in raw_events[:3]:
+                mapped_category, subcategory = infer_sports_expansion_type(
+                    item.get("title") or "",
+                    item.get("description") or "",
+                    " ".join([str(part) for part in (item.get("address") or [])])
+                )
+                sample.append({
+                    "title": item.get("title"),
+                    "date": item.get("date"),
+                    "address": item.get("address"),
+                    "address_matches_city": sports_address_matches_city(item.get("address") or [], normalized_city, country_code),
+                    "sports_relevant": sports_result_is_relevant(item, query_text, subcategory),
+                    "detected_subcategory": subcategory,
+                    "link": item.get("link"),
+                    "thumbnail": bool(item.get("thumbnail")),
+                })
+
+            attempts.append({
+                "ok": True,
+                "query": query_text,
+                "request_url": safe_url,
+                "events_count": len(raw_events),
+                "sample": sample,
+            })
+        except HTTPError as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "status_code": exc.code,
+                "error": str(exc),
+                "error_body": read_http_error_body(exc),
+            })
+        except Exception as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "error": str(exc),
+            })
+
+    return {
+        "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "sports_expansion": True,
+        "ok": any(item.get("ok") for item in attempts),
+        "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+        "normalized": {"city": normalized_city, "country_code": country_code},
+        "queries": queries,
+        "total_events_count": total_events,
+        "official_fallback_preview": get_sports_official_fallback_events(
+            normalized_city, country_code, from_date, to_date, category
+        )[:5],
+        "attempts": attempts,
+    }
+
+
+def get_serpapi_events(city="", country="", from_date="", to_date="", category="", size=40):
+    if not SERPAPI_API_KEY:
+        return []
+
+    normalized_city, country_code = normalize_request_location(city, country)
+    query_variants = build_serpapi_query_variants(
+        city=normalized_city,
+        country=country_code,
+        category=category,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    events = []
+    seen_raw = set()
+
+    for query_text in query_variants:
+        try:
+            data, safe_url = call_serpapi_google_events(query_text, country_code)
+        except HTTPError as exc:
+            print("SerpApi HTTP error:", exc.code, read_http_error_body(exc))
+            continue
+        except Exception as exc:
+            print("SerpApi error:", exc)
+            continue
+
+        raw_events = data.get("events_results", []) or []
+
+        for item in raw_events:
+            title = item.get("title") or "Unknown event"
+            raw_key = f"{title}|{item.get('date')}|{item.get('address')}"
+            if raw_key in seen_raw:
+                continue
+            seen_raw.add(raw_key)
+
+            description = item.get("description") or ""
+            date_info = item.get("date") or {}
+            start_date, start_time = parse_serpapi_date(date_info, from_date)
+
+            if not start_date:
+                continue
+
+            if from_date and start_date < from_date:
+                continue
+            if to_date and start_date > to_date:
+                continue
+
+            address_parts = item.get("address") or []
+
+            if not serpapi_address_matches_city(address_parts, normalized_city, country_code):
+                continue
+
+            address_text = ", ".join([str(part) for part in address_parts if part])
+
+            venue = item.get("venue", {}).get("name") if isinstance(item.get("venue"), dict) else ""
+            if not venue:
+                venue = address_parts[0] if address_parts else ""
+
+            mapped_category = infer_serpapi_category(title, description, category, venue or address_text)
+            subcategory = infer_serpapi_subcategory(title, description, category, venue or address_text)
+
+            event = {
+                "title": title,
+                "category": mapped_category,
+                "subcategory": subcategory,
+                "start_date": start_date,
+                "start_time": start_time,
+                "city": normalized_city,
+                "country": country_code,
+                "venue": venue or address_text,
+                "source_name": "SerpApi",
+                "source_url": get_serpapi_event_link(item),
+                "ticket_url": get_serpapi_event_link(item) or build_ticket_search_url({
+                    "title": title,
+                    "city": normalized_city,
+                    "country": country_code,
+                    "start_date": start_date,
+                    "subcategory": subcategory,
+                }),
+                "image_url": item.get("thumbnail"),
+                "price_min": None,
+                "price_max": None,
+                "currency": None,
+                "is_vip_available": False,
+                "status": "active",
+                "serpapi_query": query_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            event = enhance_eventbrite_fallback(event)
+            event["ai_score"] = calculate_ai_score(event)
+            events.append(event)
+
+            if len(events) >= size:
+                return events
+
+    return events
+
+
+def build_debug_serpapi_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city, country_code = normalize_request_location(city, country)
+    query_variants = build_serpapi_query_variants(
+        city=normalized_city,
+        country=country_code,
+        category=category,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    if not SERPAPI_API_KEY:
+        return {
+            "serpapi_api_key_present": False,
+            "base_url": SERPAPI_API_BASE_URL,
+            "ok": False,
+            "error": "missing SERPAPI_API_KEY",
+            "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+            "normalized": {"city": normalized_city, "country_code": country_code},
+            "query_variants": query_variants,
+        }
+
+    attempts = []
+    total_events = 0
+
+    for query_text in query_variants:
+        safe_params = {
+            "engine": "google_events",
+            "q": query_text,
+            "api_key": "***",
+            "hl": "en",
+            "gl": (country_code or "US").lower(),
+        }
+        safe_url = SERPAPI_API_BASE_URL + "?" + urlencode(safe_params)
+
+        try:
+            data, _ = call_serpapi_google_events(query_text, country_code)
+            raw_events = data.get("events_results", []) or []
+            total_events += len(raw_events)
+
+            sample = []
+            for item in raw_events[:3]:
+                address_parts = item.get("address") or []
+                sample.append({
+                    "title": item.get("title"),
+                    "date": item.get("date"),
+                    "address": item.get("address"),
+                    "address_matches_city": serpapi_address_matches_city(address_parts, normalized_city, country_code),
+                    "link": item.get("link"),
+                    "thumbnail": bool(item.get("thumbnail")),
+                })
+
+            attempts.append({
+                "ok": True,
+                "query": query_text,
+                "request_url": safe_url,
+                "events_count": len(raw_events),
+                "search_metadata_status": data.get("search_metadata", {}).get("status"),
+                "sample": sample,
+            })
+
+        except HTTPError as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "status_code": exc.code,
+                "error": str(exc),
+                "error_body": read_http_error_body(exc),
+            })
+        except Exception as exc:
+            attempts.append({
+                "ok": False,
+                "query": query_text,
+                "request_url": safe_url,
+                "error": str(exc),
+            })
+
+    return {
+        "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "base_url": SERPAPI_API_BASE_URL,
+        "ok": any(item.get("ok") for item in attempts),
+        "input": {"city": city, "country": country, "from_date": from_date, "to_date": to_date, "category": category},
+        "normalized": {"city": normalized_city, "country_code": country_code},
+        "query_variants": query_variants,
+        "total_events_count": total_events,
+        "attempts": attempts,
+    }
+
+
+def get_ticketmaster_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not TICKETMASTER_API_KEY:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+
+    params = {
+        "apikey": TICKETMASTER_API_KEY,
+        "size": size,
+        "sort": "date,asc",
+    }
+
+    if normalized_city:
+        params["city"] = normalized_city
+
+    if country_code:
+        params["countryCode"] = country_code
+
+    if from_date:
+        params["startDateTime"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        params["endDateTime"] = f"{to_date}T23:59:59Z"
+
+    if category in ["sport", "motorsport", "horse_racing"]:
+        params["classificationName"] = "sports"
+    elif category == "concert":
+        params["classificationName"] = "music"
+    elif category == "theatre":
+        params["classificationName"] = "arts theatre"
+    elif category == "culture":
+        params["classificationName"] = "arts"
+
+    url = "https://app.ticketmaster.com/discovery/v2/events.json?" + urlencode(params)
+    request = Request(url, headers={"User-Agent": "WELOVEIT-Events/1.0"})
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("Ticketmaster error:", exc)
+        return []
+
+    raw_events = data.get("_embedded", {}).get("events", [])
+    events = []
+
+    for item in raw_events:
+        dates = item.get("dates", {}).get("start", {})
+        start_date = dates.get("localDate")
+        start_time = dates.get("localTime")
+
+        if not start_date:
+            continue
+
+        venue_data = item.get("_embedded", {}).get("venues", [{}])[0]
+
+        city_name = venue_data.get("city", {}).get("name", "")
+        country_name = venue_data.get("country", {}).get("name", "")
+        venue_name = venue_data.get("name", "")
+
+        if normalized_city and city_name:
+            if clean_text(city_name) != clean_text(normalized_city):
+                continue
+
+        if country_code:
+            venue_country_code = venue_data.get("country", {}).get("countryCode", "")
+            if venue_country_code and clean_text(venue_country_code) != clean_text(country_code):
+                continue
+
+        classifications = item.get("classifications", [])
+        segment = ""
+        genre = ""
+        subgenre = ""
+
+        if classifications:
+            segment = classifications[0].get("segment", {}).get("name", "")
+            genre = classifications[0].get("genre", {}).get("name", "")
+            subgenre = classifications[0].get("subGenre", {}).get("name", "")
+
+        mapped_category = normalize_category(" ".join([segment, genre, subgenre]))
+
+        if category and mapped_category != category:
+            continue
+
+        price_min = None
+        price_max = None
+        currency = None
+
+        price_ranges = item.get("priceRanges", [])
+        if price_ranges:
+            price_min = price_ranges[0].get("min")
+            price_max = price_ranges[0].get("max")
+            currency = price_ranges[0].get("currency")
+
+        event = {
+            "title": item.get("name", "Unknown event"),
+            "category": mapped_category,
+            "subcategory": subgenre or genre or segment or "Live event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "Ticketmaster",
+            "source_url": item.get("url"),
+            "ticket_url": item.get("url"),
+            "image_url": get_best_image(item.get("images", [])),
+            "price_min": price_min,
+            "price_max": price_max,
+            "currency": currency,
+            "is_vip_available": False,
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event = enhance_eventbrite_fallback(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def get_predicthq_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not PREDICT_API_KEY:
+        return []
+
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+
+    params = {
+        "limit": size,
+        "sort": "start",
+        "state": "active",
+    }
+
+    if normalized_city:
+        params["q"] = normalized_city
+
+    if country_code:
+        params["country"] = country_code
+
+    if from_date:
+        params["start.gte"] = f"{from_date}T00:00:00Z"
+
+    if to_date:
+        params["start.lte"] = f"{to_date}T23:59:59Z"
+
+    phq_category = PREDICTHQ_CATEGORY_MAP.get(category)
+    if phq_category:
+        params["category"] = phq_category
+
+    url = PREDICT_API_URL.rstrip("/") + "/?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {PREDICT_API_KEY}",
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("PredictHQ error:", exc)
+        return []
+
+    raw_events = data.get("results", [])
+    events = []
+
+    for item in raw_events:
+        title = item.get("title", "Unknown event")
+        start = item.get("start", "")
+        start_date = start[:10] if start else ""
+        start_time = start[11:19] if len(start) >= 19 else None
+
+        if not start_date:
+            continue
+
+        phq_category = item.get("category", "")
+        mapped_category = normalize_category(phq_category)
+
+        if category and mapped_category != category:
+            if category == "culture" and mapped_category in ["culture", "theatre", "concert"]:
+                pass
+            else:
+                continue
+
+        location = item.get("geo", {}).get("address", {})
+        city_name = location.get("locality") or normalized_city
+        country_name = location.get("country_code") or country_code
+
+        venue_name = ""
+        entities = item.get("entities", [])
+        if entities:
+            venue_name = entities[0].get("name", "")
+
+        event = {
+            "title": title,
+            "category": mapped_category,
+            "subcategory": phq_category or "Live event",
+            "start_date": start_date,
+            "start_time": start_time,
+            "city": city_name,
+            "country": country_name,
+            "venue": venue_name,
+            "source_name": "PredictHQ",
+            "source_url": item.get("url"),
+            "ticket_url": None,
+            "image_url": None,
+            "price_min": None,
+            "price_max": None,
+            "currency": None,
+            "is_vip_available": False,
+            "status": item.get("state", "active"),
+            "rank": item.get("rank"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        event = enhance_predicthq_event(event)
+        event = enhance_eventbrite_fallback(event)
+        event["ticket_url"] = build_ticket_search_url(event)
+        event["ai_score"] = calculate_ai_score(event)
+        events.append(event)
+
+    return events
+
+
+def get_eventbrite_events(city="", country="", from_date="", to_date="", category="", size=80):
+    """
+    v14: Eventbrite API public city search disattivata.
+    Motivo: /events/search/ ha restituito HTTP 404 nel debug v13.
+    Manteniamo Eventbrite come fallback link tramite eventbrite_search_url.
+    """
+    return []
+
+
+def build_debug_eventbrite_payload(city="", country="", from_date="", to_date="", category=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    location_address = normalized_city
+    if country_code:
+        location_address = f"{normalized_city}, {country_code}"
+
+    fallback_url = build_eventbrite_search_url(city=normalized_city, country=country_code)
+
+    return {
+        "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
+        "base_url": EVENTBRITE_API_BASE_URL,
+        "status": "fallback_only",
+        "reason": "Eventbrite /events/search/ returned HTTP 404 in v13 debug; API search disabled in v14.",
+        "input": {
+            "city": city,
+            "country": country,
+            "from_date": from_date,
+            "to_date": to_date,
+            "category": category,
+        },
+        "normalized": {
+            "city": normalized_city,
+            "country_code": country_code,
+            "location_address": location_address,
+        },
+        "eventbrite_public_search_url": fallback_url,
+        "example_eventbrite_query_url": fallback_url + "?q=" + quote_plus("events " + normalized_city),
+    }
+
+
+def get_default_football_dates(from_date="", to_date=""):
+    today = datetime.now(timezone.utc).date()
+    start = from_date or today.isoformat()
+    end = to_date or (today + timedelta(days=180)).isoformat()
+    return start, end
+
+
+def get_football_season(date_string=""):
+    try:
+        year = int((date_string or "")[:4])
+        month = int((date_string or "")[5:7])
+        return year if month >= 8 else year - 1
+    except Exception:
+        today = datetime.now(timezone.utc).date()
+        return today.year if today.month >= 8 else today.year - 1
+
+
+def get_football_city_key(city="", country=""):
+    normalized_city = clean_text(normalize_city(city))
+    country_code = clean_text(normalize_country_code(country))
+
+    if not normalized_city or not country_code:
+        return ""
+
+    return f"{normalized_city}|{country_code}"
+
+
+def call_api_football(path, params):
+    if not FOOTBALL_API_KEY:
+        print("API-Football debug: missing FOOTBALL_API_KEY")
+        return None
+
+    url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "x-apisports-key": FOOTBALL_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return data
+    except Exception as exc:
+        print("API-Football error:", exc)
+        return None
+
+
+def debug_api_football_request(path, params):
+    if not FOOTBALL_API_KEY:
+        return {
+            "ok": False,
+            "error": "missing FOOTBALL_API_KEY",
+            "request_url": None,
+            "params": params,
+        }
+
+    url = FOOTBALL_API_BASE_URL.rstrip("/") + path + "?" + urlencode(params)
+
+    request = Request(
+        url,
+        headers={
+            "x-apisports-key": FOOTBALL_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "WELOVEIT-Events/1.0",
+        }
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            status_code = response.status
+            data = json.loads(response.read().decode("utf-8"))
+
+        results = data.get("response", [])
+        sample = []
+
+        for item in results[:5]:
+            fixture = item.get("fixture", {})
+            league = item.get("league", {})
+            teams = item.get("teams", {})
+            venue = fixture.get("venue", {})
+
+            sample.append({
+                "fixture_id": fixture.get("id"),
+                "date": fixture.get("date"),
+                "league": league.get("name"),
+                "league_id": league.get("id"),
+                "season": league.get("season"),
+                "home": teams.get("home", {}).get("name"),
+                "away": teams.get("away", {}).get("name"),
+                "venue_name": venue.get("name"),
+                "venue_city": venue.get("city"),
+                "status": fixture.get("status", {}).get("long"),
+            })
+
+        return {
+            "ok": True,
+            "status_code": status_code,
+            "request_url": url.replace(FOOTBALL_API_KEY or "", "***"),
+            "params": params,
+            "errors": data.get("errors"),
+            "results_count": len(results),
+            "sample": sample,
+            "paging": data.get("paging"),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "request_url": url.replace(FOOTBALL_API_KEY or "", "***"),
+            "params": params,
+        }
+
+
+def football_fixture_to_event(item, normalized_city, country_code, requested_city=""):
+    fixture = item.get("fixture", {})
+    fixture_id = fixture.get("id")
+
+    fixture_date = fixture.get("date", "")
+    start_date = fixture_date[:10] if fixture_date else ""
+    start_time = fixture_date[11:19] if len(fixture_date) >= 19 else None
+
+    if not start_date:
+        return None
+
+    league = item.get("league", {})
+    teams_data = item.get("teams", {})
+    home = teams_data.get("home", {})
+    away = teams_data.get("away", {})
+    venue_data = fixture.get("venue", {})
+
+    home_name = home.get("name", "")
+    away_name = away.get("name", "")
+
+    if not home_name or not away_name:
+        return None
+
+    venue_name = venue_data.get("name") or ""
+    venue_city = venue_data.get("city") or normalized_city
+
+    event = {
+        "title": f"{home_name} vs {away_name}",
+        "category": "sport",
+        "subcategory": league.get("name") or "Football",
+        "start_date": start_date,
+        "start_time": start_time,
+        "city": venue_city,
+        "country": league.get("country") or country_code,
+        "venue": venue_name,
+        "source_name": "API-Football",
+        "source_url": None,
+        "ticket_url": None,
+        "image_url": None,
+        "price_min": None,
+        "price_max": None,
+        "currency": None,
+        "is_vip_available": False,
+        "status": fixture.get("status", {}).get("long") or "scheduled",
+        "league": league.get("name") or "Football",
+        "home_team": home_name,
+        "away_team": away_name,
+        "fixture_id": fixture_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if requested_city and not event_matches_requested_city(event, requested_city):
+        return None
+
+    event["ticket_url"] = build_ticket_search_url(event)
+    event["ai_score"] = calculate_ai_score(event)
+
+    return event
+
+
+def get_api_football_events_by_league(city="", country="", from_date="", to_date="", size=80):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+
+    leagues = FOOTBALL_CITY_LEAGUES.get(city_key, [])
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
+
+    events = []
+    seen_fixture_ids = set()
+
+    for league in leagues:
+        params = {
+            "league": league["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+
+        data = call_api_football("/fixtures", params)
+        if not data:
+            continue
+
+        for item in data.get("response", []):
+            fixture_id = item.get("fixture", {}).get("id")
+
+            if fixture_id and fixture_id in seen_fixture_ids:
+                continue
+
+            event = football_fixture_to_event(item, normalized_city, country_code, city)
+
+            if not event:
+                continue
+
+            if fixture_id:
+                seen_fixture_ids.add(fixture_id)
+
+            event["football_season"] = football_season
+            event["football_search_type"] = "league"
+            events.append(event)
+
+    return events[:size]
+
+
+def get_api_football_events_by_team(city="", country="", from_date="", to_date="", size=80):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+
+    teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
+
+    events = []
+    seen_fixture_ids = set()
+
+    for team in teams[:8]:
+        params = {
+            "team": team["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+
+        data = call_api_football("/fixtures", params)
+        if not data:
+            continue
+
+        for item in data.get("response", []):
+            fixture_id = item.get("fixture", {}).get("id")
+
+            if fixture_id and fixture_id in seen_fixture_ids:
+                continue
+
+            event = football_fixture_to_event(item, normalized_city, country_code, city)
+
+            if not event:
+                continue
+
+            if fixture_id:
+                seen_fixture_ids.add(fixture_id)
+
+            if not event.get("venue"):
+                event["venue"] = team.get("venue", "")
+
+            event["football_season"] = football_season
+            event["football_search_type"] = "team"
+            events.append(event)
+
+    return events[:size]
+
+
+def get_api_football_events(city="", country="", from_date="", to_date="", category="", size=80):
+    if not FOOTBALL_API_KEY:
+        return []
+
+    if category and category != "sport":
+        return []
+
+    events = (
+        get_api_football_events_by_league(city, country, from_date, to_date, size)
+        + get_api_football_events_by_team(city, country, from_date, to_date, size)
+    )
+
+    return dedupe_events(events)[:size]
+
+
+def build_debug_football_payload(city="", country="", from_date="", to_date=""):
+    normalized_city = normalize_city(city)
+    country_code = normalize_country_code(country)
+    city_key = get_football_city_key(city, country)
+    football_from, football_to = get_default_football_dates(from_date, to_date)
+    football_season = get_football_season(football_from)
+
+    leagues = FOOTBALL_CITY_LEAGUES.get(city_key, [])
+    teams = FOOTBALL_CITY_TEAMS.get(city_key, [])
+
+    league_requests = []
+    team_requests = []
+
+    for league in leagues:
+        params = {
+            "league": league["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+        result = debug_api_football_request("/fixtures", params)
+        result["league_config"] = league
+        league_requests.append(result)
+
+    for team in teams[:8]:
+        params = {
+            "team": team["id"],
+            "season": football_season,
+            "from": football_from,
+            "to": football_to,
+        }
+        result = debug_api_football_request("/fixtures", params)
+        result["team_config"] = team
+        team_requests.append(result)
+
+    return {
+        "football_api_key_present": bool(FOOTBALL_API_KEY),
+        "base_url": FOOTBALL_API_BASE_URL,
+        "input": {
+            "city": city,
+            "country": country,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+        "normalized": {
+            "city": normalized_city,
+            "country_code": country_code,
+            "city_key": city_key,
+            "football_from": football_from,
+            "football_to": football_to,
+            "football_season": football_season,
+        },
+        "mapped_leagues": leagues,
+        "mapped_teams": teams,
+        "league_requests": league_requests,
+        "team_requests": team_requests,
+    }
+
+
+def get_japan_local_fallback_events(city="", country="", from_date="", to_date="", category="", size=5):
+    normalized_city, country_code = normalize_request_location(city, country)
+
+    if country_code != "JP":
+        return []
+
+    title_map = {
+        "concert": "Japan local concert ticket sources",
+        "sport": "Japan local sports ticket sources",
+        "theatre": "Japan local theatre and live show sources",
+        "culture": "Japan local events and exhibitions sources",
+        "": "Japan local event ticket sources",
+    }
+
+    title = title_map.get(category, title_map[""])
+    event = {
+        "title": title,
+        "category": category or "culture",
+        "subcategory": "Local ticket sources",
+        "start_date": from_date or datetime.now(timezone.utc).date().isoformat(),
+        "start_time": None,
+        "city": normalized_city,
+        "country": country_code,
+        "venue": "Ticket Pia / Lawson Ticket / eplus / J.League / NPB",
+        "source_name": "Japan Local Fallback",
+        "source_url": build_japan_local_search_url(normalized_city, category, from_date, to_date),
+        "ticket_url": build_japan_local_search_url(normalized_city, category, from_date, to_date),
+        "image_url": None,
+        "price_min": None,
+        "price_max": None,
+        "currency": "JPY",
+        "is_vip_available": False,
+        "status": "fallback",
+        "local_sources": JAPAN_LOCAL_SOURCE_LABELS,
+        "ai_score": 70,
+        "quality_score": 70,
+        "is_low_quality_conference": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    return [event]
+
+
+def recalibrate_quality_score(event):
+    source = clean_text(event.get("source_name"))
+    category = clean_text(event.get("category"))
+    title = clean_text(event.get("title"))
+    subcategory = clean_text(event.get("subcategory"))
+    venue = clean_text(event.get("venue"))
+    ticket_url = clean_text(event.get("ticket_url"))
+    source_url = clean_text(event.get("source_url"))
+    combined = f"{title} {subcategory} {venue} {ticket_url} {source_url}"
+
+    # v29: score più realistico e distribuito.
+    # Non deve creare una parete di 96: 96 deve essere solo per eventi davvero top.
+    if source == "ticketmaster":
+        score = 74
+    elif source == "seatgeek":
+        score = 72
+    elif source == "api-football":
+        score = 70
+    elif source == "predicthq":
+        score = 58
+    elif source == "sports expansion":
+        score = 50
+    elif source == "serpapi":
+        score = 48
+    elif source == "sports official fallback":
+        score = 42
+    else:
+        score = 50
+
+    # Completezza dati.
+    if event.get("ticket_url"):
+        score += 4
+    if event.get("image_url"):
+        score += 4
+    if event.get("venue"):
+        score += 3
+    if event.get("start_time"):
+        score += 2
+
+    # Eventi veramente premium.
+    major_final_words = [
+        "fa cup final",
+        "prem final",
+        "premiership final",
+        "playoff finals",
+        "play-off final",
+        "diamond league",
+        "aew all in",
+        "nfl london",
+        "nations championship",
+        "wwe monday night raw",
+        "wwe smackdown",
+    ]
+    if category == "sport" and any(word in combined for word in major_final_words):
+        score += 12
+
+    # Buoni eventi sportivi, ma non necessariamente headline.
+    strong_sport_words = [
+        "boxing",
+        "fight night",
+        "rugby union",
+        "basketball",
+        "west ham",
+        "fulham",
+        "chelsea",
+        "saracens",
+        "harlequins",
+        "barbarians",
+        "strongman",
+        "wrestling",
+    ]
+    if category == "sport" and any(word in combined for word in strong_sport_words):
+        score += 6
+
+    # Venue premium.
+    iconic_sport_venues = [
+        "wembley stadium",
+        "the o2",
+        "tottenham hotspur stadium",
+        "allianz stadium",
+        "twickenham",
+        "london stadium",
+        "royal albert hall",
+        "stamford bridge",
+        "lord's",
+        "lords",
+    ]
+    if category == "sport" and any(word in venue for word in iconic_sport_venues):
+        score += 5
+
+    # Venue buone ma non top.
+    good_venues = [
+        "york hall",
+        "stonex stadium",
+        "copper box arena",
+        "ovo arena wembley",
+        "craven cottage",
+    ]
+    if category == "sport" and any(word in venue for word in good_venues):
+        score += 3
+
+    # Penalità per eventi seriali/minori/talk/premium package.
+    lower_priority_words = [
+        "venue premium tickets",
+        "register interest",
+        "day 1",
+        "day 2",
+        "day 3",
+        "day 4",
+        "day 5",
+        "day 6",
+        "semi final",
+        "lunch",
+        "game changer",
+        "fanzone",
+        "fanpark",
+        "watch party",
+        "class",
+        "classes",
+        "session",
+        "self defence",
+        "self-defense",
+        "women’s only",
+        "womens only",
+        "ladies only",
+    ]
+    if any(word in combined for word in lower_priority_words):
+        score -= 14
+
+    # Sports Expansion è utile ma deve stare sotto i ticketing ufficiali,
+    # salvo risultati chiaramente importanti.
+    if source == "sports expansion":
+        if any(word in combined for word in major_final_words):
+            score += 6
+        else:
+            score -= 4
+
+    if source == "predicthq" and not event.get("image_url"):
+        score -= 6
+
+    # Cap differenziati per evitare appiattimento.
+    if source == "ticketmaster":
+        cap = 94
+    elif source in ["seatgeek", "api-football"]:
+        cap = 90
+    elif source == "sports expansion":
+        cap = 82
+    elif source == "predicthq":
+        cap = 78
+    elif source == "serpapi":
+        cap = 76
+    else:
+        cap = 72
+
+    score = max(25, min(score, cap))
+    event["quality_score"] = score
+    event["ai_score"] = score
+    return event
+
+
+def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
+    city, country = normalize_request_location(city, country)
+    events = []
+
+    events += get_ticketmaster_events(city, country, from_date, to_date, category, size)
+    events += get_seatgeek_events(city, country, from_date, to_date, category, size)
+    events += get_serpapi_events(city, country, from_date, to_date, category, size)
+    events += get_sports_expansion_events(city, country, from_date, to_date, category, size)
+    events += get_predicthq_events(city, country, from_date, to_date, category, size)
+    events += get_api_football_events(city, country, from_date, to_date, category, size)
+    events += get_eventbrite_events(city, country, from_date, to_date, category, size)
+
+    events = dedupe_events(events)
+    events = [event for event in events if event_is_in_range(event, from_date, to_date)]
+    events = [event for event in events if event_matches_requested_country(event, country)]
+    events = [event for event in events if event_matches_requested_city(event, city)]
+    events = [apply_quality_ranking(event) for event in events]
+    events = filter_low_quality_events(events, category=category)
+    events = limit_recurring_events(events, max_per_title_venue=2)
+
+    if normalize_country_code(country) == "JP" and len(events) < 8:
+        events += get_japan_local_fallback_events(city, country, from_date, to_date, category)
+
+    if category in ["sport", "motorsport"] and len(events) < 8:
+        events += get_sports_official_fallback_events(city, country, from_date, to_date, category)
+
+    events = [event for event in events if not should_drop_low_value_event(event)]
+    events = [recalibrate_quality_score(event) for event in events]
+    events = dedupe_events(events)
+    events = limit_recurring_events(events, max_per_title_venue=2)
+    events = dedupe_events(events)
+    events = [recalibrate_quality_score(event) for event in events]
+
+    source_priority = {
+        "ticketmaster": 1,
+        "seatgeek": 2,
+        "api-football": 3,
+        "predicthq": 4,
+        "sports expansion": 5,
+        "serpapi": 6,
+        "sports official fallback": 7,
+    }
+
+    # v28: prima qualità reale, poi fonte, poi data.
+    events.sort(key=lambda event: (
+        -(event.get("quality_score") or event.get("ai_score") or 0),
+        source_priority.get(clean_text(event.get("source_name")), 9),
+        event.get("start_date") or "",
+        event.get("title") or ""
+    ))
+
+    return events[:50]
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send_json(self, payload, status=200):
+        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_json({"status": "ok"})
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
+        if parsed.path == "/":
+            self.send_json({
+                "service": "WELOVEIT Events API",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v29 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "endpoints": {
+                    "health": "/health",
+                    "events": "/events?city=rome&country=IT",
+                    "debug_football": "/debug-football?city=rome&country=IT&from_date=2026-02-01&to_date=2026-04-30",
+                    "debug_seatgeek": "/debug-seatgeek?city=new%20york&country=US&category=concert",
+                    "debug_serpapi": "/debug-serpapi?city=tokyo&country=JP&from_date=2026-05-14&to_date=2026-07-25",
+                    "debug_sports": "/debug-sports?city=london&country=GB&category=sport&from_date=2026-01-01&to_date=2026-12-31",
+                    "debug_eventbrite": "/debug-eventbrite?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
+                    "culture_rome": "/events?city=rome&country=IT&category=culture&from_date=2026-02-01&to_date=2026-04-30",
+                    "sport_london": "/events?city=london&country=GB&category=sport",
+                    "sport_rome": "/events?city=rome&country=IT&category=sport",
+                    "concert": "/events?city=new%20york&country=US&category=concert",
+                    "tokyo": "/events?city=tokyo&country=JP&from_date=2026-05-14&to_date=2026-07-25",
+                    "japan_country_search": "/events?city=giappone&from_date=2026-05-14&to_date=2026-07-25"
+                }
+            })
+            return
+
+        if parsed.path == "/health":
+            self.send_json({
+                "status": "ok",
+                "service": "WELOVEIT Events API",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v29 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "api_key_present": bool(TICKETMASTER_API_KEY),
+                "predict_api_key_present": bool(PREDICT_API_KEY),
+                "predict_api_url_present": bool(PREDICT_API_URL),
+                "football_api_key_present": bool(FOOTBALL_API_KEY),
+                "eventbrite_api_key_present": bool(EVENTBRITE_API_KEY),
+                "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
+                "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
+                "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+                "serpapi_query_expansion": True,
+                "japan_local_fallback": True,
+                "serpapi_location_filter": True,
+                "advanced_source_priority": True,
+                "serpapi_category_cleanup": True,
+                "sports_expansion_engine": True,
+                "sports_query_fix": True,
+                "sports_location_filter": True,
+                "sports_relevance_filter": True,
+                "sports_dedupe_fix": True,
+                "sports_false_positive_filter": True,
+                "sports_watch_party_filter": True,
+                "sports_score_recalibration": True,
+                "sports_recurring_series_limit": True,
+                "sports_v28_rank_spread": True,
+                "sports_v29_score_spread": True,
+                "sports_v29_class_filter": True,
+                "sports_official_fallback": True,
+                "eventbrite_mode": "fallback_only",
+                "seatgeek_auth_mode": "client_id_only",
+                "country_city_fix": True,
+                "parking_filter": True,
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v29-sports-score-spread-class-filter"
+            })
+            return
+
+        if parsed.path == "/debug-football":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+
+            payload = build_debug_football_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-sports":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", ["sport"])[0]
+
+            city, country = normalize_request_location(city, country)
+
+            payload = build_debug_sports_expansion_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-serpapi":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            city, country = normalize_request_location(city, country)
+
+            payload = build_debug_serpapi_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-seatgeek":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            payload = build_debug_seatgeek_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/debug-eventbrite":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            payload = build_debug_eventbrite_payload(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category
+            )
+
+            self.send_json(payload)
+            return
+
+        if parsed.path == "/events":
+            city = query.get("city", query.get("destination", [""]))[0]
+            country = query.get("country", query.get("countryCode", [""]))[0]
+            from_date = query.get("from_date", [""])[0]
+            to_date = query.get("to_date", [""])[0]
+            category = query.get("category", [""])[0]
+
+            city, country = normalize_request_location(city, country)
+
+            events = get_all_events(
+                city=city,
+                country=country,
+                from_date=from_date,
+                to_date=to_date,
+                category=category,
+                size=80
+            )
+
+            self.send_json(events)
+            return
+
+        self.send_json({"error": "not found"}, status=404)
+
+    def log_message(self, format, *args):
+        print(format % args)
+
+
+def run():
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    print(f"WELOVEIT Events API running on port {PORT}")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    run()
