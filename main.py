@@ -825,13 +825,14 @@ def similar_text(a, b):
 def should_drop_low_value_event(event):
     title = clean_text(event.get("title"))
     source = clean_text(event.get("source_name"))
+    source_url = clean_text(event.get("source_url"))
+    ticket_url = clean_text(event.get("ticket_url"))
+    venue = clean_text(event.get("venue"))
+    category = clean_text(event.get("category"))
+    subcategory = clean_text(event.get("subcategory"))
+    combined = f"{title} {source_url} {ticket_url} {venue} {subcategory}"
 
     low_value_words = [
-        "parking",
-        "parking pass",
-        "parking lot",
-        "parkwhiz",
-        "garage",
         "flexiticket",
         "flex ticket",
         "flex-ticket",
@@ -845,6 +846,42 @@ def should_drop_low_value_event(event):
     for word in low_value_words:
         if word in title:
             return True
+
+    # v27: non sono eventi sportivi live; sono fan park / watch party.
+    sport_watch_party_words = [
+        "fanzone",
+        "fan zone",
+        "fanpark",
+        "fan park",
+        "watch party",
+        "viewing party",
+        "world cup 2026: england v",
+        "brixton world cup",
+    ]
+    if category == "sport" and any(word in combined for word in sport_watch_party_words):
+        return True
+
+    # v27: comedy/concert finiti dentro sport via SerpApi generico.
+    non_sport_words = [
+        "peter kay",
+        "comedy",
+        "harry styles",
+        "concert",
+        "live tour",
+    ]
+    if category == "sport" and source in ["serpapi", "sports expansion"] and any(word in combined for word in non_sport_words):
+        strong_sport_words = ["boxing", "rugby", "nfl", "wwe", "wrestling", "fa cup", "efl", "premiership", "championship"]
+        if not any(word in combined for word in strong_sport_words):
+            return True
+
+    bad_links = [
+        "open.spotify.com",
+        "spotify.com",
+        "dice.fm",
+        "gigtotem.com/listings",
+    ]
+    if category == "sport" and any(bad in combined for bad in bad_links):
+        return True
 
     if source == "ticketmaster":
         museum_words = [
@@ -1129,6 +1166,32 @@ def event_quality_score(event):
     return score
 
 
+def canonical_sports_title(title):
+    value = normalize_event_title(title)
+
+    replacements = {
+        "gallagher prem final 2026": "premiership rugby final",
+        "premiership rugby final": "premiership rugby final",
+        "premiership rugby final tba vs tba": "premiership rugby final",
+        "autumn internationals england vs new zealand": "nations championship england new zealand",
+        "nations championship england v new zealand": "nations championship england new zealand",
+        "nfl international series indianapolis colts at washington commanders": "nfl london colts commanders",
+        "nfl london 2026 colts vs commanders register interest": "nfl london colts commanders",
+    }
+
+    for old, new in replacements.items():
+        if old in value:
+            return new
+
+    value = value.replace(" v ", " vs ")
+    value = value.replace(" versus ", " vs ")
+    value = value.replace(" register interest", "")
+    value = value.replace(" venue premium tickets", "")
+    value = re.sub(r"\s+", " ", value).strip()
+
+    return value
+
+
 def dedupe_events(events):
     filtered = []
 
@@ -1147,6 +1210,9 @@ def dedupe_events(events):
         city = clean_text(event.get("city"))
         country = clean_text(normalize_country_code(event.get("country")))
         start_date = clean_text(event.get("start_date"))
+        category = clean_text(event.get("category"))
+        subcategory = clean_text(event.get("subcategory"))
+        canonical_title = canonical_sports_title(title) if category == "sport" else normalize_event_title(title)
 
         duplicate = False
 
@@ -1155,13 +1221,20 @@ def dedupe_events(events):
             same_city = clean_text(existing.get("city")) == city
             same_country = clean_text(normalize_country_code(existing.get("country"))) == country
             same_venue = clean_text(existing.get("venue")) == venue
-            title_similar = similar_text(title, existing.get("title"))
+            same_subcategory = clean_text(existing.get("subcategory")) == subcategory
+            existing_category = clean_text(existing.get("category"))
+            existing_canonical_title = canonical_sports_title(existing.get("title")) if existing_category == "sport" else normalize_event_title(existing.get("title"))
+            title_similar = similar_text(title, existing.get("title")) or canonical_title == existing_canonical_title
 
             if same_date and same_city and same_country and title_similar:
                 duplicate = True
                 break
 
             if same_date and same_venue and title_similar:
+                duplicate = True
+                break
+
+            if category == "sport" and same_date and same_venue and same_subcategory:
                 duplicate = True
                 break
 
@@ -1213,8 +1286,12 @@ def limit_recurring_events(events, max_per_title_venue=2):
             output.append(event)
             continue
 
+        local_max = max_per_title_venue
+        if "valorant masters" in title_key or "world sevens football" in title_key:
+            local_max = 1
+
         counts[key] = counts.get(key, 0) + 1
-        if counts[key] <= max_per_title_venue:
+        if counts[key] <= local_max:
             output.append(event)
 
     return output
@@ -3441,6 +3518,55 @@ def get_japan_local_fallback_events(city="", country="", from_date="", to_date="
     return [event]
 
 
+def recalibrate_quality_score(event):
+    score = int(event.get("quality_score") or event.get("ai_score") or 60)
+    source = clean_text(event.get("source_name"))
+    category = clean_text(event.get("category"))
+    title = clean_text(event.get("title"))
+
+    if source == "ticketmaster":
+        score = min(score, 96)
+        if event.get("image_url"):
+            score += 1
+        if event.get("ticket_url"):
+            score += 1
+
+    if source == "seatgeek":
+        score = min(score, 95)
+
+    if source == "sports expansion":
+        score = min(score, 88)
+
+    if source == "serpapi":
+        score = min(score, 82)
+
+    if source == "sports official fallback":
+        score = min(score, 68)
+
+    premium_words = [
+        "final",
+        "nfl",
+        "wwe",
+        "aew",
+        "fight night",
+        "boxing",
+        "nations championship",
+        "diamond league",
+        "fa cup",
+        "premiership",
+    ]
+    if category == "sport" and any(word in title for word in premium_words):
+        score += 2
+
+    if any(word in title for word in ["fanzone", "fanpark", "world cup 2026:"]):
+        score -= 20
+
+    score = max(40, min(score, 99))
+    event["quality_score"] = score
+    event["ai_score"] = score
+    return event
+
+
 def get_all_events(city="", country="", from_date="", to_date="", category="", size=80):
     city, country = normalize_request_location(city, country)
     events = []
@@ -3466,6 +3592,11 @@ def get_all_events(city="", country="", from_date="", to_date="", category="", s
 
     if category in ["sport", "motorsport"] and len(events) < 8:
         events += get_sports_official_fallback_events(city, country, from_date, to_date, category)
+
+    events = dedupe_events(events)
+    events = [event for event in events if not should_drop_low_value_event(event)]
+    events = limit_recurring_events(events, max_per_title_venue=2)
+    events = [recalibrate_quality_score(event) for event in events]
 
     # v15: prima qualità, poi data. WELOVEIT deve sembrare un prodotto curato, non un dump cronologico.
     events.sort(key=lambda event: (
@@ -3500,7 +3631,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v26 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v27 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
@@ -3523,7 +3654,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v26 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v27 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -3543,12 +3674,14 @@ class Handler(BaseHTTPRequestHandler):
                 "sports_relevance_filter": True,
                 "sports_dedupe_fix": True,
                 "sports_false_positive_filter": True,
+                "sports_watch_party_filter": True,
+                "sports_score_recalibration": True,
                 "sports_official_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v26-sports-dedupe-score"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v27-sports-final-cleanup"
             })
             return
 
