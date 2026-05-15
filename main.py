@@ -2138,10 +2138,21 @@ def requested_sport_terms(category="", query_hint=""):
     return terms[:10]
 
 
+def sports_year_terms(from_date="", to_date=""):
+    years = []
+    for value in [from_date, to_date]:
+        if value and len(value) >= 4 and value[:4].isdigit():
+            if value[:4] not in years:
+                years.append(value[:4])
+    if not years:
+        years.append(str(datetime.now(timezone.utc).year))
+    return " ".join(years)
+
+
 def build_sports_expansion_queries(city="", country="", from_date="", to_date="", category=""):
     normalized_city, country_code = normalize_request_location(city, country)
     country_name = COUNTRY_NAME_MAP.get(country_code, country_code or "")
-    date_terms = month_year_terms(from_date, to_date)
+    year_terms = sports_year_terms(from_date, to_date)
     city_key = get_football_city_key(normalized_city, country_code)
 
     terms = requested_sport_terms(category or "sport")
@@ -2152,22 +2163,36 @@ def build_sports_expansion_queries(city="", country="", from_date="", to_date=""
         if q and q not in queries:
             queries.append(q)
 
+    # v24: query più corte. Google Events spesso restituisce zero con range lunghi tipo
+    # "January 2026 December 2026 2026".
+    for hint in SPORTS_EXPANSION_CITY_HINTS.get(city_key, [])[:8]:
+        add(f"{hint} {year_terms}")
+        add(f"{hint} tickets {year_terms}")
+
     for term in terms:
         config = SPORTS_EXPANSION_KEYWORDS.get(term)
         if not config:
             continue
 
-        for base in config.get("queries", [])[:2]:
-            add(f"{base} {normalized_city} {country_name} {date_terms}")
+        subcategory = config.get("subcategory", "")
+        add(f"{subcategory} {normalized_city} {year_terms}")
+        add(f"{subcategory} tickets {normalized_city} {year_terms}")
 
-    for hint in SPORTS_EXPANSION_CITY_HINTS.get(city_key, [])[:6]:
-        add(f"{hint} {date_terms} tickets")
+        for base in config.get("queries", [])[:2]:
+            add(f"{base} {normalized_city} {year_terms}")
+
+    if category == "sport":
+        add(f"sports events {normalized_city} {year_terms}")
+        add(f"sports tickets {normalized_city} {year_terms}")
+        add(f"{normalized_city} stadium events {year_terms}")
 
     if category == "motorsport":
-        add(f"Formula 1 Grand Prix {country_name} {date_terms} tickets")
-        add(f"MotoGP Grand Prix {country_name} {date_terms} tickets")
+        add(f"Formula 1 Grand Prix {country_name} {year_terms}")
+        add(f"F1 tickets {country_name} {year_terms}")
+        add(f"MotoGP Grand Prix {country_name} {year_terms}")
+        add(f"MotoGP tickets {country_name} {year_terms}")
 
-    return queries[:12]
+    return queries[:20]
 
 
 def infer_sports_expansion_type(title="", description="", venue=""):
@@ -2309,6 +2334,7 @@ def get_sports_official_fallback_events(city="", country="", from_date="", to_da
 
     events = []
     start_date = from_date or datetime.now(timezone.utc).date().isoformat()
+    year_terms = sports_year_terms(from_date, to_date)
 
     for term in terms[:size]:
         config = SPORTS_EXPANSION_KEYWORDS.get(term)
@@ -2316,9 +2342,12 @@ def get_sports_official_fallback_events(city="", country="", from_date="", to_da
             continue
 
         subcategory = config.get("subcategory", "Sport")
-        title = f"{subcategory} official schedule and ticket sources"
         official_sources = config.get("official_sources", [])
         source_names = " / ".join(official_sources)
+
+        title = f"{subcategory} events, schedule and ticket sources"
+        search_query = f"{subcategory} {normalized_city} {country_code} {year_terms} official schedule tickets {' '.join(official_sources)}"
+        search_url = "https://www.google.com/search?" + urlencode({"q": search_query})
 
         event = {
             "title": title,
@@ -2330,8 +2359,8 @@ def get_sports_official_fallback_events(city="", country="", from_date="", to_da
             "country": country_code,
             "venue": source_names or "Official sports sources",
             "source_name": "Sports Official Fallback",
-            "source_url": build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
-            "ticket_url": build_sports_ticket_search_url(title, normalized_city, country_code, from_date, to_date, subcategory),
+            "source_url": search_url,
+            "ticket_url": search_url,
             "image_url": None,
             "price_min": None,
             "price_max": None,
@@ -2367,7 +2396,7 @@ def build_debug_sports_expansion_payload(city="", country="", from_date="", to_d
             "queries": queries,
         }
 
-    for query_text in queries[:8]:
+    for query_text in queries[:20]:
         safe_params = {
             "engine": "google_events",
             "q": query_text,
@@ -2424,6 +2453,9 @@ def build_debug_sports_expansion_payload(city="", country="", from_date="", to_d
         "normalized": {"city": normalized_city, "country_code": country_code},
         "queries": queries,
         "total_events_count": total_events,
+        "official_fallback_preview": get_sports_official_fallback_events(
+            normalized_city, country_code, from_date, to_date, category
+        )[:5],
         "attempts": attempts,
     }
 
@@ -3340,7 +3372,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v24 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
@@ -3363,7 +3395,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v24 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -3378,12 +3410,13 @@ class Handler(BaseHTTPRequestHandler):
                 "advanced_source_priority": True,
                 "serpapi_category_cleanup": True,
                 "sports_expansion_engine": True,
+                "sports_query_fix": True,
                 "sports_official_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v23-sports-expansion"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v24-sports-query-fix"
             })
             return
 
