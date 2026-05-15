@@ -2237,6 +2237,68 @@ def build_sports_ticket_search_url(title="", city="", country="", from_date="", 
     return "https://www.google.com/search?" + urlencode({"q": query})
 
 
+def sports_address_matches_city(address_parts, requested_city="", requested_country=""):
+    requested_city_clean = clean_text(normalize_city(requested_city))
+    address_text = clean_text(" ".join([str(part) for part in (address_parts or [])]))
+
+    if not requested_city_clean:
+        return True
+
+    metro_aliases = {
+        "london": ["london", "wembley", "twickenham", "tottenham", "stratford", "greenwich"],
+        "new york": ["new york", "brooklyn", "queens", "bronx", "manhattan", "newark", "east rutherford", "flushing"],
+        "las vegas": ["las vegas", "paradise", "henderson"],
+        "paris": ["paris", "saint-denis", "nanterre", "boulogne"],
+        "madrid": ["madrid", "leganes", "alcala"],
+        "barcelona": ["barcelona", "montmelo", "badalona"],
+        "rome": ["rome", "roma"],
+        "milan": ["milan", "milano", "monza"],
+        "tokyo": ["tokyo", "saitama", "yokohama", "chiba", "kawasaki"],
+        "toronto": ["toronto", "mississauga", "scarborough"],
+        "shanghai": ["shanghai"],
+        "são paulo": ["são paulo", "sao paulo", "interlagos"],
+        "buenos aires": ["buenos aires"],
+    }
+
+    aliases = metro_aliases.get(requested_city_clean, city_aliases_for(requested_city_clean))
+    return any(alias and alias in address_text for alias in aliases)
+
+
+def sports_result_is_relevant(item, query_text="", subcategory=""):
+    title = clean_text(item.get("title"))
+    description = clean_text(item.get("description"))
+    link = clean_text(item.get("link"))
+    query = clean_text(query_text)
+    text = f"{title} {description} {link} {query} {clean_text(subcategory)}"
+
+    bad_domains = ["open.spotify.com", "spotify.com", "dice.fm"]
+
+    sport_words = [
+        "boxing", "boxe", "fight", "championship boxing", "box cup",
+        "mma", "ufc", "ultra-mma", "one championship", "pfl",
+        "nfl", "american football", "football team", "international series",
+        "rugby", "premiership rugby", "nations championship", "twickenham",
+        "tennis", "atp", "wta", "grand slam",
+        "basketball", "nba",
+        "baseball", "mlb", "npb",
+        "hockey", "nhl",
+        "formula 1", "f1", "grand prix", "motogp", "nascar",
+        "fa cup", "play-off final", "stadium",
+    ]
+
+    if any(word in text for word in sport_words):
+        return True
+
+    if any(domain in link for domain in bad_domains):
+        return False
+
+    music_like_words = ["concert", "tour", "album", "spotify", "band", "dj", "singer"]
+    if any(word in title for word in music_like_words):
+        return False
+
+    return False
+
+
 def get_sports_expansion_events(city="", country="", from_date="", to_date="", category="", size=30):
     if not SERPAPI_API_KEY:
         return []
@@ -2272,9 +2334,13 @@ def get_sports_expansion_events(city="", country="", from_date="", to_date="", c
                 continue
 
             address_parts = item.get("address") or []
-            if country_code == "JP" and not serpapi_address_matches_city(address_parts, normalized_city, country_code):
+
+            if not sports_address_matches_city(address_parts, normalized_city, country_code):
                 title_clean = clean_text(title)
-                if not any(term in title_clean for term in ["japan", "japanese", "motogp", "grand prix"]):
+                if not (
+                    category == "motorsport"
+                    and any(term in title_clean for term in ["grand prix", "motogp", "formula 1", "f1"])
+                ):
                     continue
 
             address_text = ", ".join([str(part) for part in address_parts if part])
@@ -2283,6 +2349,9 @@ def get_sports_expansion_events(city="", country="", from_date="", to_date="", c
                 venue = address_parts[0] if address_parts else ""
 
             mapped_category, subcategory = infer_sports_expansion_type(title, description, venue or address_text)
+
+            if not sports_result_is_relevant(item, query_text, subcategory):
+                continue
 
             raw_key = f"{normalize_event_title(title)}|{start_date}|{venue}|{subcategory}"
             if raw_key in seen:
@@ -2413,10 +2482,18 @@ def build_debug_sports_expansion_payload(city="", country="", from_date="", to_d
             sample = []
 
             for item in raw_events[:3]:
+                mapped_category, subcategory = infer_sports_expansion_type(
+                    item.get("title") or "",
+                    item.get("description") or "",
+                    " ".join([str(part) for part in (item.get("address") or [])])
+                )
                 sample.append({
                     "title": item.get("title"),
                     "date": item.get("date"),
                     "address": item.get("address"),
+                    "address_matches_city": sports_address_matches_city(item.get("address") or [], normalized_city, country_code),
+                    "sports_relevant": sports_result_is_relevant(item, query_text, subcategory),
+                    "detected_subcategory": subcategory,
                     "link": item.get("link"),
                     "thumbnail": bool(item.get("thumbnail")),
                 })
@@ -3372,7 +3449,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_json({
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v24 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v25 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "endpoints": {
                     "health": "/health",
                     "events": "/events?city=rome&country=IT",
@@ -3395,7 +3472,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "ok",
                 "service": "WELOVEIT Events API",
-                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v24 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
+                "provider": "Ticketmaster + SeatGeek + SerpApi + Sports Expansion v25 + PredictHQ + API-Football + Japan local fallback + Eventbrite fallback",
                 "api_key_present": bool(TICKETMASTER_API_KEY),
                 "predict_api_key_present": bool(PREDICT_API_KEY),
                 "predict_api_url_present": bool(PREDICT_API_URL),
@@ -3411,12 +3488,14 @@ class Handler(BaseHTTPRequestHandler):
                 "serpapi_category_cleanup": True,
                 "sports_expansion_engine": True,
                 "sports_query_fix": True,
+                "sports_location_filter": True,
+                "sports_relevance_filter": True,
                 "sports_official_fallback": True,
                 "eventbrite_mode": "fallback_only",
                 "seatgeek_auth_mode": "client_id_only",
                 "country_city_fix": True,
                 "parking_filter": True,
-                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v24-sports-query-fix"
+                "version": "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v25-sports-cleanup"
             })
             return
 
