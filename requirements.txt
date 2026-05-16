@@ -1,2 +1,4 @@
 # Zero-dependency prototype.
 # No external Python packages required.
+fastapi==0.115.6
+uvicorn==0.34.0
