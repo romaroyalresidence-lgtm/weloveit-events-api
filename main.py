@@ -1,13 +1,13 @@
-# main.py — WELOVEIT Events API v33
-# V33 Search Discovery Engine:
-# - keeps V31/V32 sport polish logic
-# - adds Google-like discovery layer through SerpApi organic search
-# - adds country-local ticketing/event sources
-# - Rome/Roma parity + city alias expansion
-# - Italian Open / Internazionali BNL d'Italia ranking boost
-# - hard final date filter after all providers
-# - avoids direct Google scraping: uses SerpApi API only
-# - no httpx: stdlib urllib + FastAPI
+# main.py — WELOVEIT Events API v34
+# V34 Search Discovery Date Guard:
+# - no httpx: uses stdlib urllib + FastAPI
+# - hard final date filter after merge
+# - Roma/Rome alias parity
+# - Italian Open ranking boost only when event is actually in requested date range
+# - Search Discovery does NOT invent dates anymore
+# - Search Discovery rejects wrong-year results, e.g. 2027 when searching 2026
+# - filters airport-delay, parking, classes, fake/low-quality discovery results
+# - source priority + stronger dedupe
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v33-search-discovery"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v34-search-date-guard"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -39,8 +39,9 @@ SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "").strip()
 DEFAULT_TIMEOUT = 12
 MAX_PROVIDER_EVENTS = 80
 MAX_FINAL_EVENTS = 70
-MAX_SEARCH_DISCOVERY_QUERIES = 16
-MAX_SEARCH_DISCOVERY_RESULTS_PER_QUERY = 10
+
+ITALIAN_OPEN_2026_START = "2026-05-06"
+ITALIAN_OPEN_2026_END = "2026-05-18"
 
 app = FastAPI(title="WELOVEIT Events API", version=VERSION)
 app.add_middleware(
@@ -66,70 +67,26 @@ COUNTRY_ALIASES = {
 }
 
 CITY_ALIASES = {
-    "rome": ("Roma", "IT"),
-    "roma": ("Roma", "IT"),
-    "roma capitale": ("Roma", "IT"),
-    "rom": ("Roma", "IT"),
-
-    "milan": ("Milano", "IT"),
-    "milano": ("Milano", "IT"),
-    "florence": ("Firenze", "IT"),
-    "firenze": ("Firenze", "IT"),
-    "venice": ("Venezia", "IT"),
-    "venezia": ("Venezia", "IT"),
-    "naples": ("Napoli", "IT"),
-    "napoli": ("Napoli", "IT"),
-    "turin": ("Torino", "IT"),
-    "torino": ("Torino", "IT"),
-
-    "london": ("London", "GB"),
-    "londra": ("London", "GB"),
-
+    "rome": ("Roma", "IT"), "roma": ("Roma", "IT"), "roma capitale": ("Roma", "IT"), "rom": ("Roma", "IT"),
+    "milan": ("Milano", "IT"), "milano": ("Milano", "IT"),
+    "florence": ("Firenze", "IT"), "firenze": ("Firenze", "IT"),
+    "venice": ("Venezia", "IT"), "venezia": ("Venezia", "IT"),
+    "naples": ("Napoli", "IT"), "napoli": ("Napoli", "IT"),
+    "turin": ("Torino", "IT"), "torino": ("Torino", "IT"),
+    "london": ("London", "GB"), "londra": ("London", "GB"),
     "tokyo": ("Tokyo", "JP"),
-    "tokio": ("Tokyo", "JP"),
-
-    "new york": ("New York", "US"),
-    "nyc": ("New York", "US"),
-
+    "new york": ("New York", "US"), "nyc": ("New York", "US"),
     "paris": ("Paris", "FR"),
-    "parigi": ("Paris", "FR"),
-
     "madrid": ("Madrid", "ES"),
-    "madri": ("Madrid", "ES"),
     "barcelona": ("Barcelona", "ES"),
-    "barcellona": ("Barcelona", "ES"),
-
     "berlin": ("Berlin", "DE"),
-    "berlino": ("Berlin", "DE"),
-
     "toronto": ("Toronto", "CA"),
     "montreal": ("Montreal", "CA"),
-
-    "sao paulo": ("São Paulo", "BR"),
-    "san paolo": ("São Paulo", "BR"),
-    "rio": ("Rio de Janeiro", "BR"),
-    "rio de janeiro": ("Rio de Janeiro", "BR"),
-
+    "sao paulo": ("São Paulo", "BR"), "san paolo": ("São Paulo", "BR"),
+    "rio": ("Rio de Janeiro", "BR"), "rio de janeiro": ("Rio de Janeiro", "BR"),
     "buenos aires": ("Buenos Aires", "AR"),
-
-    "beijing": ("Beijing", "CN"),
-    "pechino": ("Beijing", "CN"),
+    "beijing": ("Beijing", "CN"), "pechino": ("Beijing", "CN"),
     "shanghai": ("Shanghai", "CN"),
-}
-
-CITY_SEARCH_ALIASES = {
-    "Roma": ["Roma", "Rome"],
-    "Milano": ["Milano", "Milan"],
-    "Firenze": ["Firenze", "Florence"],
-    "Venezia": ["Venezia", "Venice"],
-    "Napoli": ["Napoli", "Naples"],
-    "Torino": ["Torino", "Turin"],
-    "Paris": ["Paris", "Parigi"],
-    "Madrid": ["Madrid", "Madri"],
-    "Barcelona": ["Barcelona", "Barcellona"],
-    "Tokyo": ["Tokyo", "Tokio"],
-    "London": ["London", "Londra"],
-    "New York": ["New York", "NYC"],
 }
 
 COUNTRY_NAMES = {
@@ -144,20 +101,6 @@ COUNTRY_NAMES = {
     "BR": "Brazil",
     "AR": "Argentina",
     "CN": "China",
-}
-
-COUNTRY_SEARCH_NAMES = {
-    "IT": ["Italy", "Italia"],
-    "GB": ["United Kingdom", "UK", "Great Britain"],
-    "US": ["United States", "USA"],
-    "JP": ["Japan", "Giappone"],
-    "FR": ["France", "Francia"],
-    "ES": ["Spain", "España", "Spagna"],
-    "DE": ["Germany", "Deutschland", "Germania"],
-    "CA": ["Canada"],
-    "BR": ["Brazil", "Brasil", "Brasile"],
-    "AR": ["Argentina"],
-    "CN": ["China", "Cina"],
 }
 
 TICKETMASTER_COUNTRY_SEGMENT = {
@@ -184,115 +127,6 @@ SEATGEEK_TYPES = {
     "tennis": "sports",
 }
 
-LOCAL_SEARCH_SITES = {
-    "IT": [
-        "ticketone.it",
-        "ticketmaster.it",
-        "dice.fm",
-        "ra.co",
-        "eventbrite.it",
-        "internazionalibnlditalia.com",
-        "sport.ticketone.it",
-        "vivaticket.com",
-        "boxol.it",
-        "ciaotickets.com",
-        "fansale.it",
-    ],
-    "FR": [
-        "fnacspectacles.com",
-        "francebillet.com",
-        "ticketmaster.fr",
-        "seetickets.com/fr",
-        "shotgun.live",
-        "dice.fm",
-        "accorarena.com",
-        "stadefrance.com",
-        "parisladefense-arena.com",
-    ],
-    "ES": [
-        "entradas.com",
-        "ticketmaster.es",
-        "elcorteingles.es/entradas",
-        "dice.fm",
-        "wegow.com",
-        "seetickets.com/es",
-        "entradasatualcance.com",
-    ],
-    "JP": [
-        "t.pia.jp",
-        "l-tike.com",
-        "eplus.jp",
-        "rakuten.co.jp/ticket",
-        "livepocket.jp",
-        "jleague.jp",
-        "npb.jp",
-        "sumo.or.jp",
-    ],
-    "US": [
-        "ticketmaster.com",
-        "seatgeek.com",
-        "axs.com",
-        "stubhub.com",
-        "vividseats.com",
-        "jambase.com",
-        "bandsintown.com",
-        "dice.fm",
-    ],
-    "GB": [
-        "ticketmaster.co.uk",
-        "seetickets.com",
-        "axs.com/uk",
-        "dice.fm",
-        "skiddle.com",
-        "ents24.com",
-        "eventbrite.co.uk",
-        "allianzstadiumtwickenham.com",
-        "wembleystadium.com",
-    ],
-    "DE": [
-        "eventim.de",
-        "ticketmaster.de",
-        "reservix.de",
-        "dice.fm",
-        "ra.co",
-    ],
-    "CA": [
-        "ticketmaster.ca",
-        "ticketweb.ca",
-        "stubhub.ca",
-        "seatgeek.com",
-        "dice.fm",
-    ],
-    "BR": [
-        "eventim.com.br",
-        "ticketmaster.com.br",
-        "sympla.com.br",
-        "ingresso.com",
-        "ticketsforfun.com.br",
-    ],
-    "AR": [
-        "ticketek.com.ar",
-        "entradauno.com",
-        "tuentrada.com",
-        "passline.com",
-    ],
-    "CN": [
-        "damai.cn",
-        "maoyan.com",
-        "showstart.com",
-        "trip.com",
-    ],
-}
-
-OFFICIAL_SPORT_SITES = {
-    "IT": ["internazionalibnlditalia.com", "legaseriea.it", "figc.it", "asroma.com", "sslazio.it"],
-    "FR": ["rolandgarros.com", "psg.fr", "stadefrance.com", "lnr.fr"],
-    "ES": ["laliga.com", "realmadrid.com", "fcbarcelona.com", "mutuamadridopen.com"],
-    "JP": ["jleague.jp", "npb.jp", "sumo.or.jp", "t.pia.jp"],
-    "US": ["nfl.com", "nba.com", "mlb.com", "nhl.com", "ufc.com", "toprank.com"],
-    "GB": ["premiershiprugby.com", "thefa.com", "nfl.com", "wembleystadium.com", "allianzstadiumtwickenham.com"],
-}
-
 BAD_TITLE_PATTERNS = [
     r"\bparking\b",
     r"\bpark(?:ing)? pass\b",
@@ -311,15 +145,11 @@ BAD_TITLE_PATTERNS = [
     r"\bfanpark\b",
     r"\bfan zone\b",
     r"\bfanzone\b",
-    r"\bmeetup\b",
-    r"\bwebinar\b",
 ]
 
 LOW_QUALITY_SOURCE_PATTERNS = [
     "google.com/maps",
     "maps/vt",
-    "pinterest.",
-    "facebook.com/share",
 ]
 
 TENNIS_ROMA_KEYWORDS = [
@@ -346,18 +176,6 @@ MONTHS = {
     "oct": 10, "october": 10,
     "nov": 11, "november": 11,
     "dec": 12, "december": 12,
-    "gen": 1, "gennaio": 1,
-    "febbraio": 2,
-    "marzo": 3,
-    "aprile": 4,
-    "maggio": 5,
-    "giugno": 6,
-    "luglio": 7,
-    "agosto": 8,
-    "set": 9, "settembre": 9,
-    "ott": 10, "ottobre": 10,
-    "novembre": 11,
-    "dic": 12, "dicembre": 12,
 }
 
 
@@ -403,7 +221,7 @@ def clean_text(value: Any) -> str:
 
 def slug(value: Any) -> str:
     s = clean_text(value).lower().replace("&", " and ")
-    s = re.sub(r"[^a-z0-9àèéìòóùäöüßçñãõáíóúâêîôû]+", " ", s)
+    s = re.sub(r"[^a-z0-9àèéìòóùäöüßçñ]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -443,10 +261,11 @@ def normalize_location(city: str = "", country: str = "") -> Dict[str, str]:
         if not country_code:
             country_code = alias_country
 
-    if not country_code and city_key in {
+    italian_city_keys = {
         "roma", "rome", "milano", "milan", "firenze", "florence",
         "venezia", "venice", "napoli", "naples", "torino", "turin",
-    }:
+    }
+    if not country_code and city_key in italian_city_keys:
         country_code = "IT"
 
     return {
@@ -459,33 +278,21 @@ def normalize_location(city: str = "", country: str = "") -> Dict[str, str]:
     }
 
 
-def city_aliases_for_search(city: str) -> List[str]:
-    city_clean = clean_text(city)
-    aliases = CITY_SEARCH_ALIASES.get(city_clean, [city_clean])
-    seen: List[str] = []
-    for item in aliases:
-        if item and item not in seen:
-            seen.append(item)
-    return seen
-
-
-def country_aliases_for_search(country_code: str) -> List[str]:
-    return COUNTRY_SEARCH_NAMES.get(country_code, [COUNTRY_NAMES.get(country_code, country_code)])
-
-
 def is_rome(location: Dict[str, str]) -> bool:
     return slug(location.get("city")) in {"roma", "rome"} and location.get("country_code") == "IT"
 
 
 def normalize_category(category: str = "") -> str:
     c = slug(category)
-    if c in {"sports", "sport", "sporting", "sportivi", "sportivo"}:
+    if c in {"sports", "sport", "sporting"}:
         return "sport"
-    if c in {"concerts", "concert", "music", "musica", "live"}:
+    if c in {"concerts", "concert", "music", "musica"}:
         return "concert"
-    if c in {"theatre", "theater", "culture", "cultura", "arts", "arte"}:
+    if c in {"theatre", "theater", "culture", "cultura", "arts"}:
         return "culture"
-    if c in {"all", "tutte", "tutti", "any", "qualsiasi"}:
+    if c in {"tennis"}:
+        return "sport"
+    if c in {"all", "tutte", "tutti", "any"}:
         return ""
     return c
 
@@ -497,29 +304,29 @@ def category_from_title(title: str, fallback: str = "") -> Tuple[str, str]:
         return "sport", "Tennis"
     if any(k in s for k in ["rugby", "premiership", "nations championship", "twickenham", "saracens", "harlequins"]):
         return "sport", "Rugby Union"
-    if any(k in s for k in ["boxing", "fight night", "boxe", "championship boxing"]):
+    if any(k in s for k in ["boxing", "fight night", "boxe"]):
         return "sport", "Boxing"
     if any(k in s for k in ["nfl", "american football", "colts", "commanders", "jaguars", "eagles"]):
         return "sport", "NFL"
     if any(k in s for k in ["wwe", "aew", "wrestling"]):
         return "sport", "Wrestling"
-    if any(k in s for k in ["basketball", "slb", "lions", "nba"]):
+    if any(k in s for k in ["basketball", "slb", "lions"]):
         return "sport", "Basketball"
     if any(k in s for k in ["motogp", "moto gp"]):
         return "motorsport", "MotoGP"
-    if any(k in s for k in ["formula 1", "f1 grand prix", "grand prix"]):
+    if any(k in s for k in ["formula 1", "f1 grand prix"]):
         return "motorsport", "Formula 1"
-    if any(k in s for k in ["football", "soccer", "fa cup", "championship", "serie a", "lazio", "roma v", "as roma", "calcio"]):
+    if any(k in s for k in ["football", "soccer", "fa cup", "championship", "serie a", "lazio", "roma v", "as roma"]):
         return "sport", "Football"
-    if any(k in s for k in ["concert", "live tour", "festival", "dj", "opera", "tenors", "symphony", "concerto"]):
+    if any(k in s for k in ["concert", "live tour", "festival", "dj", "opera", "tenors", "symphony"]):
         return "concert", "Concerts"
-    if any(k in s for k in ["expo", "fair", "summit", "conference", "mostra", "fiera"]):
+    if any(k in s for k in ["expo", "fair", "summit", "conference"]):
         return "culture", "Expos"
 
     if fallback:
-        if fallback == "sport":
+        if fallback in {"sports", "sport"}:
             return "sport", "Sport"
-        if fallback == "concert":
+        if fallback in {"concerts", "concert", "music"}:
             return "concert", "Concerts"
         return fallback, fallback.title()
 
@@ -562,6 +369,7 @@ def make_event(
         subcategory = subcategory or sub2
 
     now = datetime.utcnow().isoformat() + "+00:00"
+
     ev = {
         "title": clean_text(title),
         "category": category,
@@ -587,8 +395,10 @@ def make_event(
         "quality_score": 70,
         "is_low_quality_conference": False,
     }
+
     if extra:
         ev.update(extra)
+
     return ev
 
 
@@ -607,6 +417,18 @@ def title_is_bad(title: str, source_url: Optional[str] = None, category: str = "
                 continue
             return True
 
+    too_generic = {
+        "home",
+        "info",
+        "info e biglietti",
+        "tickets",
+        "biglietti",
+        "official website",
+        "homepage",
+    }
+    if s in too_generic:
+        return True
+
     return False
 
 
@@ -621,7 +443,6 @@ def is_within_dates(ev: Dict[str, Any], from_date: str, to_date: str) -> bool:
         return False
     if td and d > td:
         return False
-
     return True
 
 
@@ -635,10 +456,9 @@ def city_matches(ev: Dict[str, Any], location: Dict[str, str]) -> bool:
         target_country,
         COUNTRY_NAMES.get(target_country, "").upper(),
         "GREAT BRITAIN" if target_country == "GB" else "",
-        "UNITED KINGDOM" if target_country == "GB" else "",
     }
 
-    if target_country == "IT" and ev_country in {"ITALY", "IT", "ITALIA"}:
+    if target_country == "IT" and ev_country in {"ITALY", "IT"}:
         country_ok = True
 
     if target in {"roma", "rome"}:
@@ -649,6 +469,18 @@ def city_matches(ev: Dict[str, Any], location: Dict[str, str]) -> bool:
     return bool(city_ok and country_ok)
 
 
+def result_year_conflicts(text: str, from_date: str, to_date: str) -> bool:
+    years = set(re.findall(r"\b20\d{2}\b", text or ""))
+    if not years:
+        return False
+
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or fd
+    allowed_years = {str(fd.year), str(td.year)}
+
+    return not bool(years & allowed_years)
+
+
 def source_weight(source_name: str) -> int:
     s = slug(source_name)
     if "ticketmaster" in s:
@@ -656,7 +488,7 @@ def source_weight(source_name: str) -> int:
     if "seatgeek" in s:
         return 38
     if "search discovery" in s:
-        return 33
+        return 34
     if "serpapi" in s or "sports expansion" in s:
         return 30
     if "predicthq" in s:
@@ -666,65 +498,22 @@ def source_weight(source_name: str) -> int:
     return 10
 
 
-def is_official_or_ticketing_url(url: Any) -> bool:
-    u = str(url or "").lower()
-    good_domains = [
-        "ticketmaster",
-        "ticketone",
-        "seatgeek",
-        "axs.",
-        "seetickets",
-        "eventim",
-        "fnacspectacles",
-        "francebillet",
-        "entradas",
-        "elcorteingles",
-        "t.pia.jp",
-        "l-tike",
-        "eplus.jp",
-        "rakuten",
-        "vivaticket",
-        "boxol",
-        "ciaotickets",
-        "internazionalibnlditalia",
-        "nfl.com",
-        "nba.com",
-        "mlb.com",
-        "nhl.com",
-        "ufc.com",
-        "jleague",
-        "npb.jp",
-        "sumo.or.jp",
-        "dice.fm",
-        "ra.co",
-        "wegow",
-        "shotgun",
-    ]
-    return any(x in u for x in good_domains)
-
-
 def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_category: str) -> int:
     score = source_weight(ev.get("source_name", ""))
+
     title = slug(ev.get("title"))
     venue = slug(ev.get("venue"))
     sub = slug(ev.get("subcategory"))
-    url = ev.get("ticket_url") or ev.get("source_url")
 
     if ev.get("image_url"):
         score += 8
-
-    if url and "google.com/search" not in str(url):
+    if ev.get("ticket_url") and "google.com/search" not in str(ev.get("ticket_url")):
         score += 8
-
-    if is_official_or_ticketing_url(url):
-        score += 12
-
     if city_matches(ev, location):
         score += 15
 
     if requested_category == "sport" and ev.get("category") in {"sport", "motorsport"}:
         score += 15
-
     if requested_category and requested_category != "sport" and ev.get("category") == requested_category:
         score += 12
 
@@ -732,10 +521,10 @@ def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_catego
         score += 10
 
     if "tennis" in sub or any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 18
+        score += 14
 
     if is_rome(location) and any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 20
+        score += 10
 
     if title_is_bad(ev.get("title", ""), ev.get("source_url"), ev.get("category", "")):
         score -= 40
@@ -743,11 +532,8 @@ def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_catego
     if "predicthq" in slug(ev.get("source_name")) and not ev.get("source_url"):
         score -= 8
 
-    if "search discovery" in slug(ev.get("source_name")):
-        if not ev.get("search_discovery_date_confidence"):
-            score -= 18
-        if not is_official_or_ticketing_url(url):
-            score -= 8
+    if ev.get("search_date_confidence") is False:
+        score -= 30
 
     return max(1, min(99, score))
 
@@ -756,11 +542,16 @@ def dedupe_key(ev: Dict[str, Any]) -> str:
     title = slug(ev.get("title"))
     title = re.sub(r"\bvenue premium tickets\b", "", title)
     title = re.sub(r"\bregister interest\b", "", title)
-    title = re.sub(r"\btickets?\b", "", title)
-    title = re.sub(r"\bbiglietti\b", "", title)
+    title = re.sub(r"\bhome\b", "", title)
+    title = re.sub(r"\binfo e biglietti\b", "", title)
     title = re.sub(r"\s+", " ", title).strip()
+
+    if any(k in title for k in ["internazionali bnl", "italian open"]):
+        title = "internazionali bnl italia italian open rome"
+
     d = ev.get("start_date") or ""
     venue = slug(ev.get("venue"))
+
     return f"{title[:70]}|{d}|{venue[:40]}"
 
 
@@ -776,13 +567,10 @@ def merge_events(
     for ev in events:
         if not ev.get("title") or not ev.get("start_date"):
             continue
-
         if not is_within_dates(ev, from_date, to_date):
             continue
-
         if title_is_bad(ev.get("title", ""), ev.get("source_url"), ev.get("category", "")):
             continue
-
         if location.get("city") and ev.get("status") != "fallback" and not city_matches(ev, location):
             continue
 
@@ -802,8 +590,6 @@ def merge_events(
                     ev["image_url"] = old["image_url"]
                 if (not ev.get("ticket_url") or "google.com/search" in str(ev.get("ticket_url"))) and old.get("ticket_url"):
                     ev["ticket_url"] = old["ticket_url"]
-                if not ev.get("start_time") and old.get("start_time"):
-                    ev["start_time"] = old["start_time"]
             best[k] = ev
 
     result = list(best.values())
@@ -856,6 +642,7 @@ def ticketmaster_events(location: Dict[str, str], from_date: str, to_date: str, 
         title = item.get("name") or ""
 
         cat, sub = category_from_title(title, "")
+
         if segment_name.lower() == "sports":
             cat, sub = "sport", genre_name or sub
         elif segment_name.lower() == "music":
@@ -920,12 +707,15 @@ def seatgeek_events(location: Dict[str, str], from_date: str, to_date: str, cate
 
         venue = item.get("venue") or {}
         title = item.get("title") or ""
-        cat, sub = category_from_title(title, "")
 
+        cat, sub = category_from_title(title, "")
         if item.get("type") == "concert":
             cat, sub = "concert", "Concerts"
         elif "sports" in str(item.get("type", "")):
             cat = "sport"
+
+        performers = item.get("performers") or []
+        image_url = performers[0].get("image") if performers else None
 
         out.append(make_event(
             title=title,
@@ -939,7 +729,7 @@ def seatgeek_events(location: Dict[str, str], from_date: str, to_date: str, cate
             source_name="SeatGeek",
             source_url=item.get("url"),
             ticket_url=item.get("url"),
-            image_url=(item.get("performers") or [{}])[0].get("image") if item.get("performers") else None,
+            image_url=image_url,
         ))
 
     return out
@@ -994,8 +784,8 @@ def predict_events(location: Dict[str, str], from_date: str, to_date: str, categ
 
         cat = item.get("category") or category or ""
         sub = item.get("phq_subcategory") or item.get("subcategory") or ""
-        cat2, sub2 = category_from_title(title, cat)
 
+        cat2, sub2 = category_from_title(title, cat)
         if cat in {"sports", "sport"}:
             cat2 = "sport"
         elif cat in {"concerts", "concert"}:
@@ -1014,7 +804,10 @@ def predict_events(location: Dict[str, str], from_date: str, to_date: str, categ
             source_url=item.get("url"),
             ticket_url=item.get("url"),
             image_url=None,
-            extra={"rank": item.get("rank"), "sport_type": item.get("sport_type")},
+            extra={
+                "rank": item.get("rank"),
+                "sport_type": item.get("sport_type"),
+            },
         ))
 
     return out
@@ -1027,15 +820,13 @@ def serpapi_queries(location: Dict[str, str], from_date: str, to_date: str, cate
 
     if is_rome(location) and category == "sport":
         return [
-            "Internazionali BNL d'Italia 2026",
-            "Italian Open Rome 2026 tickets",
-            "Italian Open 2026 Foro Italico Rome",
-            "ATP Rome 2026 Foro Italico",
-            "WTA Rome 2026 Foro Italico",
-            "tennis Foro Italico Roma maggio 2026",
-            "sport events Roma May 2026 tickets",
-            "Roma sport eventi maggio 2026 biglietti",
-            "Rome sport events May 2026 tickets",
+            f"sport events Roma {year} tickets",
+            f"Roma sport eventi {year} biglietti",
+            f"tennis Foro Italico Roma {year}",
+            f"Internazionali BNL d'Italia {year}",
+            f"Italian Open Rome {year} tickets",
+            f"ATP Rome {year} Foro Italico",
+            f"WTA Rome {year} Foro Italico",
         ]
 
     if category == "sport":
@@ -1065,73 +856,42 @@ def serpapi_queries(location: Dict[str, str], from_date: str, to_date: str, cate
     ]
 
 
-def parse_text_date(text: str, from_date: str) -> Tuple[Optional[str], Optional[str], bool]:
-    raw = clean_text(text)
-    if not raw:
-        return None, None, False
-
-    year_default = int((from_date or today_iso())[:4])
-    explicit_year_match = re.search(r"\b(20\d{2})\b", raw)
-    explicit_year = int(explicit_year_match.group(1)) if explicit_year_match else year_default
-
-    patterns = [
-        r"\b(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December|Gen|Gennaio|Febbraio|Marzo|Aprile|Maggio|Giugno|Luglio|Agosto|Set|Settembre|Ott|Ottobre|Novembre|Dic|Dicembre)\s+(\d{1,2})\b",
-        r"\b(\d{1,2})\s+(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December|Gen|Gennaio|Febbraio|Marzo|Aprile|Maggio|Giugno|Luglio|Agosto|Set|Settembre|Ott|Ottobre|Novembre|Dic|Dicembre)\b",
-        r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](20\d{2}))?\b",
-    ]
-
-    day: Optional[int] = None
-    month: Optional[int] = None
-    year = explicit_year
-
-    m = re.search(patterns[0], raw, re.I)
-    if m:
-        month = MONTHS.get(m.group(1).lower())
-        day = int(m.group(2))
-    else:
-        m = re.search(patterns[1], raw, re.I)
-        if m:
-            day = int(m.group(1))
-            month = MONTHS.get(m.group(2).lower())
-        else:
-            m = re.search(patterns[2], raw, re.I)
-            if m:
-                a = int(m.group(1))
-                b = int(m.group(2))
-                y = m.group(3)
-                if y:
-                    year = int(y)
-                if a > 12:
-                    day, month = a, b
-                else:
-                    month, day = a, b
-
-    if not day or not month:
-        return None, None, False
-
-    try:
-        d = date(year, month, day)
-    except Exception:
-        return None, None, False
-
-    fd = parse_date_safe(from_date)
-    if fd and d < fd and not explicit_year_match:
-        try:
-            d = date(year + 1, month, day)
-        except Exception:
-            pass
-
-    time_match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", raw)
-    t = f"{int(time_match.group(1)):02d}:{time_match.group(2)}:00" if time_match else None
-
-    return d.isoformat(), t, True
-
-
 def parse_serpapi_date(date_obj: Dict[str, Any], from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str]]:
     raw = clean_text((date_obj or {}).get("when") or (date_obj or {}).get("start_date") or "")
     start = clean_text((date_obj or {}).get("start_date") or "")
-    d, t, _ = parse_text_date(raw or start, from_date)
-    return d, t
+    year = int((from_date or today_iso())[:4])
+
+    text = raw or start
+
+    m = re.search(
+        r"\b(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\s+(\d{1,2})\b",
+        text,
+        re.I,
+    )
+    if m:
+        month = MONTHS[m.group(1).lower()]
+        day = int(m.group(2))
+    else:
+        m = re.search(
+            r"\b(\d{1,2})\s+(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\b",
+            text,
+            re.I,
+        )
+        if not m:
+            return None, None
+        day = int(m.group(1))
+        month = MONTHS[m.group(2).lower()]
+
+    d = date(year, month, day)
+    fd = parse_date_safe(from_date)
+
+    if fd and d < fd and fd.month > month:
+        d = date(year + 1, month, day)
+
+    time_match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)
+    t = f"{int(time_match.group(1)):02d}:{time_match.group(2)}:00" if time_match else None
+
+    return d.isoformat(), t
 
 
 def serpapi_events(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
@@ -1155,6 +915,11 @@ def serpapi_events(location: Dict[str, str], from_date: str, to_date: str, categ
 
         for item in data.get("events_results", []) or []:
             title = item.get("title") or ""
+
+            combined = json.dumps(item, ensure_ascii=False)
+            if result_year_conflicts(combined, from_date, to_date):
+                continue
+
             d, t = parse_serpapi_date(item.get("date") or {}, from_date, to_date)
             if not d:
                 continue
@@ -1195,162 +960,225 @@ def serpapi_events(location: Dict[str, str], from_date: str, to_date: str, categ
 
 
 def search_discovery_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
-    city_aliases = city_aliases_for_search(location["city"])
-    country_aliases = country_aliases_for_search(location["country_code"])
-    country_code = location["country_code"]
-    sites = LOCAL_SEARCH_SITES.get(country_code, [])
-    official_sport_sites = OFFICIAL_SPORT_SITES.get(country_code, [])
-    year = from_date[:4]
-    queries: List[str] = []
+    city = location["city"]
+    country_name = location["country_name"] or location["country_code"]
+    year = str((parse_date_safe(from_date) or date.today()).year)
 
-    category_terms = {
-        "sport": ["sport", "sports", "football", "tennis", "boxing", "basketball", "rugby", "tickets"],
-        "concert": ["concerts", "music", "live", "festival", "tickets"],
-        "culture": ["events", "exhibition", "theatre", "show", "tickets"],
-        "": ["events", "concerts", "sport", "shows", "tickets"],
-    }.get(category, ["events", category, "tickets"])
+    city_variants = [city]
+    if is_rome(location):
+        city_variants = ["Roma", "Rome"]
 
-    for c in city_aliases[:2]:
-        for country_name in country_aliases[:2]:
-            if is_rome(location):
-                queries.extend([
-                    f"{c} events from {from_date} to {to_date} tickets",
-                    f"{c} eventi dal {from_date} al {to_date} biglietti",
-                    f"{c} sport eventi maggio {year} biglietti",
-                    f"{c} Italian Open {year} Foro Italico tickets",
-                    f"{c} Internazionali BNL d'Italia {year} biglietti",
-                ])
-            else:
-                queries.append(f"{' '.join(category_terms[:4])} {c} {country_name} {from_date} {to_date} official tickets")
-                queries.append(f"{c} {country_name} events {year} official tickets")
-
-    for site in sites[:8]:
-        for c in city_aliases[:2]:
-            if category == "sport":
-                queries.append(f"site:{site} {c} sport {year} tickets")
-            elif category == "concert":
-                queries.append(f"site:{site} {c} concert {year} tickets")
-            else:
-                queries.append(f"site:{site} {c} events {year} tickets")
+    base_terms = []
 
     if category == "sport":
-        for site in official_sport_sites[:5]:
-            for c in city_aliases[:2]:
-                queries.append(f"site:{site} {c} {year} tickets")
+        base_terms = [
+            "official tickets sport events",
+            "official tickets football rugby tennis boxing basketball",
+            "official schedule tickets",
+        ]
+    elif category == "concert":
+        base_terms = [
+            "official tickets concerts",
+            "live music tickets",
+            "festival tickets",
+        ]
+    elif category == "culture":
+        base_terms = [
+            "official tickets exhibitions theatre events",
+            "museums expo fair tickets",
+        ]
+    else:
+        base_terms = [
+            "official tickets events",
+            "concert sport theatre exhibition tickets",
+        ]
 
     if is_rome(location):
-        queries.extend([
-            "site:internazionalibnlditalia.com Internazionali BNL d'Italia 2026 biglietti",
-            "site:ticketone.it Roma maggio 2026 sport biglietti",
-            "site:ticketmaster.it Roma maggio 2026 sport biglietti",
-            "site:sport.ticketone.it Roma tennis 2026 Foro Italico",
+        base_terms.extend([
+            f"Internazionali BNL d'Italia {year} official tickets",
+            f"Italian Open Rome {year} Foro Italico official tickets",
         ])
 
-    seen: List[str] = []
-    for q in queries:
-        q = clean_text(q)
-        if q and q not in seen:
-            seen.append(q)
+    queries: List[str] = []
+    for c in city_variants:
+        for term in base_terms:
+            if c.lower() in term.lower():
+                queries.append(term)
+            else:
+                queries.append(f"{term} {c} {country_name} {year}")
 
-    return seen[:MAX_SEARCH_DISCOVERY_QUERIES]
-
-
-def search_result_city_ok(text: str, location: Dict[str, str]) -> bool:
-    s = slug(text)
-    city_aliases = [slug(x) for x in city_aliases_for_search(location["city"])]
-
-    if is_rome(location):
-        return any(x in s for x in ["roma", "rome", "foro italico", "stadio olimpico"])
-
-    return any(alias and alias in s for alias in city_aliases)
+    return list(dict.fromkeys(queries))[:8]
 
 
-def search_result_country_ok(text: str, location: Dict[str, str]) -> bool:
-    s = slug(text)
-    code = location.get("country_code", "")
-    country_words = [slug(x) for x in country_aliases_for_search(code)]
+def parse_discovery_date_from_text(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
+    """
+    Returns: date ISO, time string, confidence.
+    V34 rule: no guessed dates. If no explicit date is found, return None.
+    """
+    if not text:
+        return None, None, False
 
-    if code == "IT" and any(x in s for x in ["italy", "italia"]):
-        return True
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or fd
 
-    return any(w and w in s for w in country_words) or bool(search_result_city_ok(text, location))
+    iso_match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
+    if iso_match:
+        y, m, d = map(int, iso_match.groups())
+        try:
+            parsed = date(y, m, d)
+            return parsed.isoformat(), None, True
+        except Exception:
+            pass
+
+    euro_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b", text)
+    if euro_match:
+        d, m, y = map(int, euro_match.groups())
+        try:
+            parsed = date(y, m, d)
+            return parsed.isoformat(), None, True
+        except Exception:
+            pass
+
+    month_name = (
+        r"Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|"
+        r"Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December"
+    )
+
+    m1 = re.search(rf"\b({month_name})\s+(\d{{1,2}})(?:,?\s+(20\d{{2}}))?\b", text, re.I)
+    if m1:
+        month = MONTHS[m1.group(1).lower()]
+        day = int(m1.group(2))
+        year = int(m1.group(3)) if m1.group(3) else fd.year
+        try:
+            parsed = date(year, month, day)
+            if parsed < fd and not m1.group(3):
+                parsed = date(fd.year + 1, month, day)
+            return parsed.isoformat(), None, True
+        except Exception:
+            pass
+
+    m2 = re.search(rf"\b(\d{{1,2}})\s+({month_name})(?:\s+(20\d{{2}}))?\b", text, re.I)
+    if m2:
+        day = int(m2.group(1))
+        month = MONTHS[m2.group(2).lower()]
+        year = int(m2.group(3)) if m2.group(3) else fd.year
+        try:
+            parsed = date(year, month, day)
+            if parsed < fd and not m2.group(3):
+                parsed = date(fd.year + 1, month, day)
+            return parsed.isoformat(), None, True
+        except Exception:
+            pass
+
+    italian_months = {
+        "gennaio": 1,
+        "febbraio": 2,
+        "marzo": 3,
+        "aprile": 4,
+        "maggio": 5,
+        "giugno": 6,
+        "luglio": 7,
+        "agosto": 8,
+        "settembre": 9,
+        "ottobre": 10,
+        "novembre": 11,
+        "dicembre": 12,
+    }
+
+    m3 = re.search(
+        r"\b(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)(?:\s+(20\d{2}))?\b",
+        text,
+        re.I,
+    )
+    if m3:
+        day = int(m3.group(1))
+        month = italian_months[m3.group(2).lower()]
+        year = int(m3.group(3)) if m3.group(3) else fd.year
+        try:
+            parsed = date(year, month, day)
+            if parsed < fd and not m3.group(3):
+                parsed = date(fd.year + 1, month, day)
+            return parsed.isoformat(), None, True
+        except Exception:
+            pass
+
+    return None, None, False
 
 
 def search_discovery_events(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    """
+    Uses SerpApi Google Search as a discovery layer.
+    V34 important rules:
+    - never invent date
+    - reject year conflicts
+    - reject generic pages
+    - only include results inside final requested range
+    """
     if not SERPAPI_API_KEY:
         return []
 
     out: List[Dict[str, Any]] = []
-    queries = search_discovery_queries(location, from_date, to_date, category)
 
-    for q in queries:
+    for q in search_discovery_queries(location, from_date, to_date, category):
         params = {
             "engine": "google",
             "q": q,
             "api_key": SERPAPI_API_KEY,
             "hl": "en",
             "gl": location["country_code"].lower() if location.get("country_code") else "us",
-            "num": MAX_SEARCH_DISCOVERY_RESULTS_PER_QUERY,
+            "num": 10,
         }
 
         ok, status, data, _ = http_get_json("https://serpapi.com/search.json", params)
         if not ok or status != 200:
             continue
 
-        results = data.get("organic_results") or []
-        for item in results[:MAX_SEARCH_DISCOVERY_RESULTS_PER_QUERY]:
+        organic = data.get("organic_results") or []
+
+        for item in organic:
             title = clean_text(item.get("title") or "")
-            link = item.get("link")
             snippet = clean_text(item.get("snippet") or "")
-            source = clean_text(item.get("source") or "")
+            link = item.get("link")
             displayed_link = clean_text(item.get("displayed_link") or "")
-            rich = item.get("rich_snippet") or {}
 
             if not title or not link:
                 continue
 
-            combined = " ".join([
-                title,
-                snippet,
-                source,
-                displayed_link,
-                json.dumps(rich, ensure_ascii=False)[:800],
-            ])
+            combined = " ".join([title, snippet, displayed_link, q])
+
+            if result_year_conflicts(combined, from_date, to_date):
+                continue
 
             if title_is_bad(title, link, category):
                 continue
 
-            if not search_result_city_ok(combined, location) and not search_result_country_ok(combined, location):
+            d, t, confidence = parse_discovery_date_from_text(combined, from_date, to_date)
+
+            if not d or not confidence:
                 continue
 
-            d, t, confidence = parse_text_date(combined, from_date)
+            temp_ev = {
+                "title": title,
+                "start_date": d,
+                "city": location["city"],
+                "country": location["country_code"],
+                "source_url": link,
+                "category": category,
+            }
 
-            if not d:
-                fd = parse_date_safe(from_date)
-                if fd:
-                    d = fd.isoformat()
-                    confidence = False
-                else:
+            if not is_within_dates(temp_ev, from_date, to_date):
+                continue
+
+            if is_rome(location):
+                location_text = slug(combined)
+                if not any(x in location_text for x in ["roma", "rome", "foro italico", "stadio olimpico"]):
                     continue
 
-            cat, sub = category_from_title(title + " " + snippet, category)
+            cat, sub = category_from_title(title, category)
+
             venue = ""
-
-            venue_patterns = [
-                r"\bat\s+([^|,.;]{3,80})",
-                r"\bvenue[:\s]+([^|,.;]{3,80})",
-                r"\bpresso\s+([^|,.;]{3,80})",
-            ]
-            for pat in venue_patterns:
-                m = re.search(pat, snippet, re.I)
-                if m:
-                    venue = clean_text(m.group(1))
-                    break
-
-            if is_rome(location) and any(k in slug(title + " " + snippet + " " + link) for k in TENNIS_ROMA_KEYWORDS):
-                cat, sub = "sport", "Tennis"
-                if not venue:
-                    venue = "Foro Italico"
+            if is_rome(location) and any(k in slug(combined) for k in TENNIS_ROMA_KEYWORDS):
+                venue = "Foro Italico"
 
             out.append(make_event(
                 title=title,
@@ -1365,12 +1193,9 @@ def search_discovery_events(location: Dict[str, str], from_date: str, to_date: s
                 source_url=link,
                 ticket_url=link,
                 image_url=None,
-                status="active",
                 extra={
                     "search_discovery_query": q,
-                    "search_discovery_snippet": snippet[:500],
-                    "search_discovery_date_confidence": confidence,
-                    "search_discovery_displayed_link": displayed_link,
+                    "search_date_confidence": confidence,
                 },
             ))
 
@@ -1383,11 +1208,26 @@ def roma_tennis_override(location: Dict[str, str], from_date: str, to_date: str,
     if not is_rome(location) or category not in {"", "sport", "tennis"}:
         return []
 
+    requested_from = parse_date_safe(from_date)
+    requested_to = parse_date_safe(to_date)
+    event_start = parse_date_safe(ITALIAN_OPEN_2026_START)
+    event_end = parse_date_safe(ITALIAN_OPEN_2026_END)
+
+    if not event_start or not event_end:
+        return []
+
+    if requested_from and requested_from > event_end:
+        return []
+    if requested_to and requested_to < event_start:
+        return []
+
+    display_date = max(requested_from or event_start, event_start).isoformat()
+
     ev = make_event(
         title="Internazionali BNL d'Italia 2026 / Italian Open Rome 2026",
         category="sport",
         subcategory="Tennis",
-        start_date="2026-05-17",
+        start_date=display_date,
         start_time=None,
         city="Roma",
         country="IT",
@@ -1398,7 +1238,11 @@ def roma_tennis_override(location: Dict[str, str], from_date: str, to_date: str,
         image_url=None,
         currency="EUR",
         status="active",
-        extra={"official_sources": ["Internazionali BNL d'Italia", "ATP", "WTA"]},
+        extra={
+            "official_sources": ["Internazionali BNL d'Italia", "ATP", "WTA"],
+            "event_real_start_date": ITALIAN_OPEN_2026_START,
+            "event_real_end_date": ITALIAN_OPEN_2026_END,
+        },
     )
 
     return [ev] if is_within_dates(ev, from_date, to_date) else []
@@ -1421,7 +1265,9 @@ def local_official_fallback(location: Dict[str, str], from_date: str, to_date: s
             source_url=url,
             ticket_url=url,
             status="fallback",
-            extra={"official_sources": ["Internazionali BNL d'Italia", "AS Roma", "SS Lazio", "CONI", "TicketOne"]},
+            extra={
+                "official_sources": ["Internazionali BNL d'Italia", "AS Roma", "SS Lazio", "CONI", "TicketOne"],
+            },
         )]
 
     return []
@@ -1451,14 +1297,14 @@ def root() -> Dict[str, Any]:
         "serpapi_category_cleanup": True,
         "sports_expansion_engine": True,
         "sports_official_fallback": True,
+        "search_discovery_engine": True,
+        "search_discovery_no_fake_dates": True,
+        "search_discovery_year_guard": True,
         "rome_alias_fix": True,
-        "city_alias_expansion": True,
         "rome_roma_parity": True,
         "hard_final_date_filter": True,
         "rome_tennis_override": True,
-        "italian_open_ranking_boost": True,
-        "search_discovery_engine": True,
-        "search_discovery_local_sites": True,
+        "italian_open_2026_end": ITALIAN_OPEN_2026_END,
         "version": VERSION,
     }
 
@@ -1479,6 +1325,7 @@ def debug_serpapi(
     loc = normalize_location(city, country)
     cat = normalize_category(category)
     events = serpapi_events(loc, from_date, to_date, cat)
+
     return {
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
         "sports_expansion": cat == "sport",
@@ -1490,7 +1337,10 @@ def debug_serpapi(
             "to_date": to_date,
             "category": category,
         },
-        "normalized": {"city": loc["city"], "country_code": loc["country_code"]},
+        "normalized": {
+            "city": loc["city"],
+            "country_code": loc["country_code"],
+        },
         "queries": serpapi_queries(loc, from_date, to_date, cat),
         "total_events_count": len(events),
         "sample": events[:10],
@@ -1507,13 +1357,14 @@ def debug_search_discovery(
 ) -> Dict[str, Any]:
     loc = normalize_location(city, country)
     cat = normalize_category(category)
-    queries = search_discovery_queries(loc, from_date, to_date, cat)
     events = search_discovery_events(loc, from_date, to_date, cat)
+
     return {
         "ok": True,
-        "version": VERSION,
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
         "search_discovery_engine": True,
+        "search_discovery_no_fake_dates": True,
+        "search_discovery_year_guard": True,
         "input": {
             "city": city,
             "country": country,
@@ -1522,8 +1373,8 @@ def debug_search_discovery(
             "category": category,
         },
         "normalized": loc,
-        "queries": queries,
-        "events_count": len(events),
+        "queries": search_discovery_queries(loc, from_date, to_date, cat),
+        "total_events_count": len(events),
         "sample": events[:20],
     }
 
@@ -1559,10 +1410,12 @@ def get_events(
 
     if is_rome(loc) and cat in {"", "sport", "tennis"}:
         has_tennis = any(
-            "tennis" in slug(e.get("subcategory")) or any(k in slug(e.get("title")) for k in TENNIS_ROMA_KEYWORDS)
+            "tennis" in slug(e.get("subcategory"))
+            or any(k in slug(e.get("title")) for k in TENNIS_ROMA_KEYWORDS)
             for e in merged
         )
         override = roma_tennis_override(loc, from_iso, to_iso, cat)
+
         if override and not has_tennis:
             override[0]["ai_score"] = 99
             override[0]["quality_score"] = 99
@@ -1620,7 +1473,6 @@ def debug_events(
             "fallback": len(fb),
             "merged": len(merged),
         },
-        "search_discovery_queries": search_discovery_queries(loc, from_iso, to_iso, cat),
         "sample": merged[:30],
     }
 
