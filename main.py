@@ -1,5 +1,5 @@
-# main.py — WELOVEIT Events API v34
-# V34 Search Discovery Date Guard:
+# main.py — WELOVEIT Events API v36
+# V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
 # - Roma/Rome alias parity
@@ -12,20 +12,23 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import logging
 import os
 import re
 import time
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v34-search-date-guard"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v36-v34-core-v35-hardening"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -42,6 +45,20 @@ MAX_FINAL_EVENTS = 70
 
 ITALIAN_OPEN_2026_START = "2026-05-06"
 ITALIAN_OPEN_2026_END = "2026-05-18"
+
+# V35/V36 hardening config
+MIN_DATE_CONFIDENCE = float(os.getenv("WELOVEIT_MIN_DATE_CONFIDENCE", "0.80"))
+DISCOVERY_CACHE_TTL_SECONDS = int(os.getenv("WELOVEIT_DISCOVERY_CACHE_TTL", "900"))
+SNAPSHOT_DIR = Path(os.getenv("WELOVEIT_EVENT_SNAPSHOT_DIR", "./snapshots/events"))
+ENABLE_EVENTS_CACHE = os.getenv("WELOVEIT_ENABLE_EVENTS_CACHE", "1").strip().lower() not in {"0", "false", "no"}
+ENABLE_DIAGNOSTICS_LOG = os.getenv("WELOVEIT_ENABLE_DIAGNOSTICS_LOG", "1").strip().lower() not in {"0", "false", "no"}
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("weloveit.events.v36")
+_EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 app = FastAPI(title="WELOVEIT Events API", version=VERSION)
 app.add_middleware(
@@ -393,6 +410,8 @@ def make_event(
         "eventbrite_search_url": eventbrite_search_url(city, country, title),
         "ai_score": 70,
         "quality_score": 70,
+        "date_confidence": 0.98,
+        "result_year_conflicts": False,
         "is_low_quality_conference": False,
     }
 
@@ -561,21 +580,30 @@ def merge_events(
     requested_category: str,
     from_date: str,
     to_date: str,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """
+    V36 merge:
+    - keeps V34 source priority + dedupe
+    - adds V35 hardening validation
+    - records discard reasons
+    - refuses fake/low-confidence/wrong-year dates
+    """
     cleaned: List[Dict[str, Any]] = []
+    discard_reasons: Dict[str, int] = {}
 
     for ev in events:
-        if not ev.get("title") or not ev.get("start_date"):
-            continue
-        if not is_within_dates(ev, from_date, to_date):
-            continue
-        if title_is_bad(ev.get("title", ""), ev.get("source_url"), ev.get("category", "")):
-            continue
-        if location.get("city") and ev.get("status") != "fallback" and not city_matches(ev, location):
+        ok, reason = validate_event_v36(ev, location, requested_category, from_date, to_date)
+        if not ok:
+            discard_reasons[reason] = discard_reasons.get(reason, 0) + 1
+            ev["discarded_reason"] = reason
+            log_event_v36(ev, accepted=False, reason=reason)
             continue
 
+        ev["discarded_reason"] = None
         ev["ai_score"] = compute_score(ev, location, requested_category)
         ev["quality_score"] = ev["ai_score"]
+        log_event_v36(ev, accepted=True, reason="accepted")
         cleaned.append(ev)
 
     best: Dict[str, Dict[str, Any]] = {}
@@ -590,6 +618,13 @@ def merge_events(
                     ev["image_url"] = old["image_url"]
                 if (not ev.get("ticket_url") or "google.com/search" in str(ev.get("ticket_url"))) and old.get("ticket_url"):
                     ev["ticket_url"] = old["ticket_url"]
+                ev["merged_sources"] = sorted(list(set(
+                    (old.get("merged_sources") or [old.get("source_name")]) +
+                    (ev.get("merged_sources") or [ev.get("source_name")])
+                )))
+            else:
+                ev["merged_sources"] = sorted(list(set(ev.get("merged_sources") or [ev.get("source_name")])))
+
             best[k] = ev
 
     result = list(best.values())
@@ -600,7 +635,14 @@ def merge_events(
             e.get("start_time") or "99:99:99",
         )
     )
+
+    if diagnostics is not None:
+        diagnostics["discard_reasons"] = discard_reasons
+        diagnostics["accepted_before_dedupe"] = len(cleaned)
+        diagnostics["deduped_count"] = len(result)
+
     return result[:MAX_FINAL_EVENTS]
+
 
 
 def ticketmaster_events(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
@@ -1196,6 +1238,7 @@ def search_discovery_events(location: Dict[str, str], from_date: str, to_date: s
                 extra={
                     "search_discovery_query": q,
                     "search_date_confidence": confidence,
+                    "date_confidence": 0.92 if confidence else 0.0,
                 },
             ))
 
@@ -1305,6 +1348,10 @@ def root() -> Dict[str, Any]:
         "hard_final_date_filter": True,
         "rome_tennis_override": True,
         "italian_open_2026_end": ITALIAN_OPEN_2026_END,
+        "v35_hardening_integrated": True,
+        "v36_cache_enabled": ENABLE_EVENTS_CACHE,
+        "v36_min_date_confidence": MIN_DATE_CONFIDENCE,
+        "v36_snapshot_dir": str(SNAPSHOT_DIR),
         "version": VERSION,
     }
 
@@ -1386,6 +1433,9 @@ def get_events(
     from_date: str = Query(default_factory=today_iso),
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
     category: str = Query(""),
+    diagnostics: bool = Query(False, description="Return events plus V36 diagnostics"),
+    use_cache: bool = Query(True, description="Use in-memory V36 cache"),
+    write_snapshot: bool = Query(False, description="Write a JSON snapshot for regression tests"),
 ) -> JSONResponse:
     loc = normalize_location(city, country)
     cat = normalize_category(category)
@@ -1396,17 +1446,35 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
+    cache_key = make_events_cache_key(city, country, from_iso, to_iso, cat)
+
+    if use_cache:
+        cached = get_events_cache(cache_key)
+        if cached:
+            cached_events, cached_diagnostics = cached
+            if diagnostics:
+                return JSONResponse({"events": cached_events, "diagnostics": cached_diagnostics})
+            return JSONResponse(cached_events)
 
     all_events: List[Dict[str, Any]] = []
-    all_events.extend(ticketmaster_events(loc, from_iso, to_iso, cat))
-    all_events.extend(seatgeek_events(loc, from_iso, to_iso, cat))
-    all_events.extend(roma_tennis_override(loc, from_iso, to_iso, cat))
-    all_events.extend(serpapi_events(loc, from_iso, to_iso, cat))
-    all_events.extend(search_discovery_events(loc, from_iso, to_iso, cat))
-    all_events.extend(predict_events(loc, from_iso, to_iso, cat))
-    all_events.extend(local_official_fallback(loc, from_iso, to_iso, cat))
+    tm = ticketmaster_events(loc, from_iso, to_iso, cat)
+    sg = seatgeek_events(loc, from_iso, to_iso, cat)
+    ro = roma_tennis_override(loc, from_iso, to_iso, cat)
+    sp = serpapi_events(loc, from_iso, to_iso, cat)
+    sd = search_discovery_events(loc, from_iso, to_iso, cat)
+    ph = predict_events(loc, from_iso, to_iso, cat)
+    fb = local_official_fallback(loc, from_iso, to_iso, cat)
 
-    merged = merge_events(all_events, loc, cat, from_iso, to_iso)
+    all_events.extend(tm)
+    all_events.extend(sg)
+    all_events.extend(ro)
+    all_events.extend(sp)
+    all_events.extend(sd)
+    all_events.extend(ph)
+    all_events.extend(fb)
+
+    merge_diag: Dict[str, Any] = {}
+    merged = merge_events(all_events, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
 
     if is_rome(loc) and cat in {"", "sport", "tennis"}:
         has_tennis = any(
@@ -1419,7 +1487,46 @@ def get_events(
         if override and not has_tennis:
             override[0]["ai_score"] = 99
             override[0]["quality_score"] = 99
-            merged = merge_events(override + merged, loc, cat, from_iso, to_iso)
+            merged = merge_events(override + merged, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+
+    diag = build_events_diagnostics(
+        loc=loc,
+        category=cat,
+        from_iso=from_iso,
+        to_iso=to_iso,
+        provider_counts={
+            "ticketmaster": len(tm),
+            "seatgeek": len(sg),
+            "rome_tennis_override": len(ro),
+            "serpapi_sports_expansion": len(sp),
+            "search_discovery": len(sd),
+            "predicthq": len(ph),
+            "fallback": len(fb),
+            "merged": len(merged),
+        },
+        raw_count=len(all_events),
+        merged_count=len(merged),
+        discard_reasons=merge_diag.get("discard_reasons", {}),
+        cache="miss",
+    )
+    diag.update({k: v for k, v in merge_diag.items() if k not in diag})
+
+    if write_snapshot:
+        diag["snapshot_path"] = save_events_snapshot(
+            merged,
+            diag,
+            city=city,
+            country=country,
+            from_date=from_iso,
+            to_date=to_iso,
+            category=cat,
+        )
+
+    if use_cache:
+        set_events_cache(cache_key, merged, diag)
+
+    if diagnostics:
+        return JSONResponse({"events": merged, "diagnostics": diag})
 
     return JSONResponse(merged)
 
@@ -1474,6 +1581,36 @@ def debug_events(
             "merged": len(merged),
         },
         "sample": merged[:30],
+    }
+
+
+
+@app.get("/debug/snapshot")
+def debug_snapshot(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query(""),
+) -> Dict[str, Any]:
+    response = get_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        diagnostics=True,
+        use_cache=False,
+        write_snapshot=True,
+    )
+
+    body = json.loads(response.body.decode("utf-8"))
+    return {
+        "ok": True,
+        "version": VERSION,
+        "snapshot_path": body.get("diagnostics", {}).get("snapshot_path"),
+        "count": len(body.get("events", [])),
+        "diagnostics": body.get("diagnostics", {}),
     }
 
 
