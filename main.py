@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v40
+# main.py — WELOVEIT Events API v41
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -58,7 +58,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v40")
+logger = logging.getLogger("weloveit.events.v41")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -111,10 +111,10 @@ def validate_event_v36(
     to_date: str,
 ) -> Tuple[bool, str]:
     """
-    V38 soft validation:
-    - keep only hard safety/date checks as rejection
-    - do NOT kill useful events only because city/category/source is imperfect
-    - ranking handles quality; validation only removes clearly unusable records
+    V41 REAL EVENTS ONLY:
+    - accept only real provider events with explicit date
+    - reject fake fallback/source cards and synthetic discovery cards
+    - ranking may sort/score, but it must never invent events
     """
     title = clean_text(ev.get("title"))
     if not title:
@@ -129,10 +129,19 @@ def validate_event_v36(
     source_name = slug(ev.get("source_name"))
     status = slug(ev.get("status"))
 
-    # Fallback/source cards are intentionally broader: keep them if dates match.
-    is_source_card = status == "fallback" or "fallback" in source_name or "official" in source_name
+    # V41: never show synthetic/fallback/source cards as events.
+    if (
+        status == "fallback"
+        or ev.get("v39_source_card")
+        or ev.get("source_card")
+        or "fallback" in source_name
+        or "expanded discovery" in source_name
+        or "venue discovery" in source_name
+        or source_name in {"v39 expanded discovery", "v39 venue discovery", "japan official fallback", "sports official fallback"}
+    ):
+        return False, "synthetic_or_fallback_card_rejected"
 
-    if not is_source_card and title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
+    if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
         return False, "bad_or_low_quality_title"
 
     combined = " ".join([
@@ -2411,6 +2420,75 @@ def is_major_city_v39(loc: Dict[str, str]) -> bool:
     }
 
 
+
+def discovery_sources_for_city_v41(location: Dict[str, str], category: str = "") -> List[Dict[str, str]]:
+    """Official/search source links shown in diagnostics only, never as fake events."""
+    city = location.get("city") or ""
+    country = location.get("country_code") or ""
+    city_key = slug(city)
+
+    def src(name: str, url: str, kind: str = "official/search") -> Dict[str, str]:
+        return {"name": name, "url": url, "kind": kind}
+
+    common = [
+        src("Ticketmaster", google_search_url(f"Ticketmaster {city} events {country} official tickets")),
+        src("Eventbrite", eventbrite_search_url(city, country, f"events {city}")),
+        src("Bandsintown", google_search_url(f"Bandsintown {city} concerts events")),
+        src("Fever", google_search_url(f"Fever {city} events")),
+        src("Resident Advisor", google_search_url(f"Resident Advisor {city} events")),
+    ]
+
+    city_specific = {
+        "paris": [
+            src("Fnac Spectacles", google_search_url("Fnac Spectacles Paris concerts sport theatre tickets"), "local ticketing"),
+            src("France Billet", google_search_url("France Billet Paris events tickets"), "local ticketing"),
+            src("Accor Arena", google_search_url("Accor Arena Paris official events tickets"), "venue official"),
+            src("Paris La Défense Arena", google_search_url("Paris La Défense Arena official events tickets"), "venue official"),
+        ],
+        "tokyo": [
+            src("eplus", google_search_url("eplus Tokyo concerts sports anime events tickets"), "Japan ticketing"),
+            src("Ticket Pia", google_search_url("Ticket Pia Tokyo events tickets"), "Japan ticketing"),
+            src("Lawson Ticket", google_search_url("Lawson Ticket Tokyo events tickets"), "Japan ticketing"),
+            src("Rakuten Ticket", google_search_url("Rakuten Ticket Tokyo events"), "Japan ticketing"),
+            src("J.League", google_search_url("J.League Tokyo fixtures tickets"), "official sport"),
+            src("NPB", google_search_url("NPB Tokyo baseball tickets fixtures"), "official sport"),
+            src("Sumo", google_search_url("Tokyo sumo tournament tickets Ryogoku Kokugikan"), "official sport"),
+        ],
+        "london": [
+            src("AXS UK", google_search_url("AXS London events tickets"), "local ticketing"),
+            src("See Tickets UK", google_search_url("See Tickets London events"), "local ticketing"),
+            src("The O2", google_search_url("The O2 London official events tickets"), "venue official"),
+        ],
+        "roma": [
+            src("TicketOne", google_search_url("TicketOne Roma eventi biglietti"), "local ticketing"),
+            src("Vivaticket", google_search_url("Vivaticket Roma eventi biglietti"), "local ticketing"),
+            src("Auditorium Parco della Musica", google_search_url("Auditorium Parco della Musica Roma eventi biglietti"), "venue official"),
+        ],
+        "rome": [
+            src("TicketOne", google_search_url("TicketOne Roma eventi biglietti"), "local ticketing"),
+            src("Vivaticket", google_search_url("Vivaticket Roma eventi biglietti"), "local ticketing"),
+            src("Auditorium Parco della Musica", google_search_url("Auditorium Parco della Musica Roma eventi biglietti"), "venue official"),
+        ],
+    }
+
+    return (city_specific.get(city_key, []) + common)[:12]
+
+
+@app.get("/discovery-sources")
+def discovery_sources_endpoint(
+    city: str = Query(...),
+    country: str = Query(""),
+    category: str = Query(""),
+) -> Dict[str, Any]:
+    loc = normalize_location(city, country)
+    cat = normalize_category(category)
+    return {
+        "ok": True,
+        "mode": "sources_only_not_events",
+        "normalized": loc,
+        "sources": discovery_sources_for_city_v41(loc, cat),
+    }
+
 @app.get("/events")
 def get_events(
     city: str = Query(...),
@@ -2418,8 +2496,8 @@ def get_events(
     from_date: str = Query(default_factory=today_iso),
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
     category: str = Query(""),
-    diagnostics: bool = Query(False, description="Return events plus V39 diagnostics"),
-    use_cache: bool = Query(True, description="Use in-memory V39 cache"),
+    diagnostics: bool = Query(False, description="Return events plus V41 diagnostics"),
+    use_cache: bool = Query(True, description="Use in-memory V41 cache"),
     write_snapshot: bool = Query(False, description="Write a JSON snapshot for regression tests"),
 ) -> JSONResponse:
     loc = normalize_location(city, country)
@@ -2431,7 +2509,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v39|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v41-real-only|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -2441,34 +2519,30 @@ def get_events(
                 return JSONResponse({"events": cached_events, "diagnostics": cached_diagnostics})
             return JSONResponse(cached_events)
 
-    # V39: collect real events through expanded category fan-out.
+    # V41: real providers only. No fake source cards, no synthetic fallback events.
     all_events, provider_counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
 
+    # Remove synthetic cards before merge even if older helper functions produced them.
+    real_events: List[Dict[str, Any]] = []
+    for ev in all_events:
+        source = slug(ev.get("source_name"))
+        status = slug(ev.get("status"))
+        if (
+            status == "fallback"
+            or ev.get("v39_source_card")
+            or ev.get("source_card")
+            or "fallback" in source
+            or "expanded discovery" in source
+            or "venue discovery" in source
+        ):
+            continue
+        real_events.append(ev)
+
     merge_diag: Dict[str, Any] = {}
-    merged = merge_events(all_events, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+    merged = merge_events(real_events, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
 
-    source_cards_added = 0
-    target_min = 24 if is_major_city_v39(loc) else 10
-
-    # V39 rule: real events first. If sparse, add transparent official discovery cards, not fake events.
-    if len(merged) < target_min:
-        source_cards = expanded_city_source_cards_v39(loc, from_iso, to_iso, cat, target_min=target_min + 10)
-        source_cards_added = len(source_cards)
-        merged = merge_events(all_events + source_cards, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
-
-    # Rome tennis safety override stays.
-    if is_rome(loc) and cat in {"", "sport", "tennis"}:
-        has_tennis = any(
-            "tennis" in slug(e.get("subcategory"))
-            or any(k in slug(e.get("title")) for k in TENNIS_ROMA_KEYWORDS)
-            for e in merged
-        )
-        override = roma_tennis_override(loc, from_iso, to_iso, cat)
-
-        if override and not has_tennis:
-            override[0]["ai_score"] = 99
-            override[0]["quality_score"] = 99
-            merged = merge_events(override + merged, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+    # V41: if sparse, do NOT invent events. Provide source suggestions in diagnostics only.
+    discovery_sources = discovery_sources_for_city_v41(loc, cat)
 
     diag = build_events_diagnostics(
         loc=loc,
@@ -2477,7 +2551,7 @@ def get_events(
         to_iso=to_iso,
         provider_counts={
             **provider_counts,
-            "v39_source_cards_added": source_cards_added,
+            "real_events_after_synthetic_rejection": len(real_events),
             "merged": len(merged),
         },
         raw_count=len(all_events),
@@ -2486,8 +2560,12 @@ def get_events(
         cache="miss",
     )
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
-    diag["v39_mode"] = "brutal_expansion_soft_filtering"
-    diag["target_min_results"] = target_min
+    diag["v41_mode"] = "real_events_only_no_fake_fallbacks"
+    diag["discovery_sources"] = discovery_sources
+    diag["empty_state_message"] = (
+        "Non abbiamo ancora trovato abbastanza eventi live verificati per questa ricerca. "
+        "Mostrare pochi risultati reali è meglio che inventare eventi."
+    )
 
     if write_snapshot:
         diag["snapshot_path"] = save_events_snapshot(
@@ -2508,6 +2586,7 @@ def get_events(
 
     return JSONResponse(merged)
 
+
 @app.get("/debug/events")
 def debug_events(
     city: str = Query(...),
@@ -2516,135 +2595,24 @@ def debug_events(
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
     category: str = Query(""),
 ) -> Dict[str, Any]:
-    loc = normalize_location(city, country)
-    cat = normalize_category(category)
-
-    fd = parse_date_safe(from_date) or date.today()
-    td = parse_date_safe(to_date) or (fd + timedelta(days=30))
-    if td < fd:
-        td = fd
-
-    from_iso, to_iso = fd.isoformat(), td.isoformat()
-
-    tm = ticketmaster_events(loc, from_iso, to_iso, cat)
-    sg = seatgeek_events(loc, from_iso, to_iso, cat)
-    ro = roma_tennis_override(loc, from_iso, to_iso, cat)
-    sp = serpapi_events(loc, from_iso, to_iso, cat)
-    sd = search_discovery_events(loc, from_iso, to_iso, cat)
-    ph = predict_events(loc, from_iso, to_iso, cat)
-    eb = eventbrite_events(loc, from_iso, to_iso, cat)
-    fb = local_official_fallback(loc, from_iso, to_iso, cat)
-
-    merged = merge_events(tm + sg + ro + sp + sd + ph + fb, loc, cat, from_iso, to_iso)
-
+    response = get_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        diagnostics=True,
+        use_cache=False,
+        write_snapshot=False,
+    )
+    body = json.loads(response.body.decode("utf-8"))
     return {
         "ok": True,
         "version": VERSION,
-        "input": {
-            "city": city,
-            "country": country,
-            "from_date": from_iso,
-            "to_date": to_iso,
-            "category": category,
-        },
-        "normalized": loc,
-        "counts": {
-            "ticketmaster": len(tm),
-            "seatgeek": len(sg),
-            "rome_tennis_override": len(ro),
-            "serpapi_sports_expansion": len(sp),
-            "search_discovery": len(sd),
-            "predicthq": len(ph),
-            "eventbrite": len(eb),
-            "fallback_available": len(fb),
-            "fallback_added": int(fallback_added),
-            "merged": len(merged),
-        },
-        "sample": merged[:30],
-    }
-
-
-
-@app.get("/ai/travel-plan")
-def ai_travel_plan(
-    city: str = Query(...),
-    country: str = Query(""),
-    from_date: str = Query(default_factory=today_iso),
-    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=3)).isoformat()),
-    interests: str = Query("events,food,nightlife,culture"),
-) -> Dict[str, Any]:
-    """WELOVEIT Premium Mode: AI Travel Operating System style planner."""
-    loc = normalize_location(city, country)
-    fd = parse_date_safe(from_date) or date.today()
-    td = parse_date_safe(to_date) or (fd + timedelta(days=2))
-    if td < fd:
-        td = fd
-
-    response = get_events(
-        city=loc["city"],
-        country=loc["country_code"],
-        from_date=fd.isoformat(),
-        to_date=td.isoformat(),
-        category="",
-        diagnostics=False,
-        use_cache=True,
-        write_snapshot=False,
-    )
-    events = json.loads(response.body.decode("utf-8")) if hasattr(response, "body") else []
-    events_by_day: Dict[str, List[Dict[str, Any]]] = {}
-    for ev in events:
-        events_by_day.setdefault(ev.get("start_date", ""), []).append(ev)
-
-    interest_list = [x.strip().lower() for x in interests.split(",") if x.strip()]
-    city_name = loc["city"]
-    country_code = loc.get("country_code")
-
-    if country_code == "JP":
-        food = "Ramen/izakaya near the final venue; reserve time for train transfers."
-        transport = "Use Suica/PASMO, Google Maps rail routing, and avoid last-train risk after nightlife."
-        ticket_sources = ["eplus", "Ticket Pia", "Lawson Ticket", "Rakuten Ticket", "J.League", "NPB", "Sumo official", "anime/game official pages"]
-        hotels = "Stay near Shinjuku, Ginza/Tokyo Station, Shibuya, Ueno or the venue rail line."
-        nightlife = "Jazz bars, listening bars, karaoke, Golden Gai, Ebisu, Roppongi or Shibuya depending on style."
-    else:
-        food = "Choose dinner within 20-30 minutes of the evening venue."
-        transport = "Use metro/train first; taxis only late night or with luggage."
-        ticket_sources = ["Ticketmaster", "SeatGeek", "Eventbrite", "official venue", "local ticketing partners"]
-        hotels = f"Stay central in {city_name}, close to transit and main venues."
-        nightlife = "Pick one compact nightlife area near hotel or event venue."
-
-    days = []
-    current = fd
-    while current <= td:
-        day_iso = current.isoformat()
-        day_events = sorted(events_by_day.get(day_iso, []), key=lambda e: -(e.get("quality_score") or 0))[:6]
-        top_event = day_events[0] if day_events else None
-
-        days.append({
-            "date": day_iso,
-            "morning": f"Start with a signature neighborhood walk in {city_name}; keep this low-effort before the live plan.",
-            "lunch": food,
-            "afternoon": "Check official sources first, then compare provider links and local fallback cards.",
-            "evening": top_event or "No high-confidence event on this exact day yet; use ticket source cards and broaden date/category.",
-            "nightlife": nightlife,
-            "transport_note": transport,
-            "top_events": day_events,
-        })
-        current += timedelta(days=1)
-
-    return {
-        "ok": True,
-        "mode": "WELOVEIT Premium AI Travel Operating System",
-        "city": city_name,
-        "country": country_code,
-        "from_date": fd.isoformat(),
-        "to_date": td.isoformat(),
-        "interests": interest_list,
-        "hotel_strategy": hotels,
-        "transport_strategy": transport,
-        "local_ticket_sources": ticket_sources,
-        "weather_placeholder": "Ready for weather integration in frontend or dedicated weather API.",
-        "total_events_considered": len(events),
-        "days": days,
+        "mode": "V41 real events only",
+        "events_count": len(body.get("events", [])),
+        "diagnostics": body.get("diagnostics", {}),
+        "sample": body.get("events", [])[:30],
     }
 
 
