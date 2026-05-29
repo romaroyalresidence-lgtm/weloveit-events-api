@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v42
+# main.py — WELOVEIT Events API v43
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -59,7 +59,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v42")
+logger = logging.getLogger("weloveit.events.v43")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -2758,6 +2758,366 @@ def discovery_sources_for_city_v41(location: Dict[str, str], category: str = "")
     return (city_specific.get(city_key, []) + common)[:12]
 
 
+
+
+# =========================
+# V43 AI SEARCH EXTRACTION ENGINE — META SEARCH REAL EVENTS ONLY
+# =========================
+# Philosophy:
+# - WELOVEIT is not just an API list.
+# - It searches the web, reads real pages, extracts structured events,
+#   finds ticket links, validates dates, deduplicates, then ranks.
+# - It NEVER creates fake event cards. No date = no event.
+
+ENABLE_AI_SEARCH_EXTRACTION = os.getenv("WELOVEIT_ENABLE_AI_SEARCH_EXTRACTION", "1").strip().lower() not in {"0", "false", "no"}
+V43_MAX_GOOGLE_RESULTS_PER_QUERY = int(os.getenv("WELOVEIT_V43_GOOGLE_RESULTS_PER_QUERY", "8"))
+V43_MAX_PAGES_TO_FETCH = int(os.getenv("WELOVEIT_V43_MAX_PAGES_TO_FETCH", "24"))
+V43_MAX_QUERIES = int(os.getenv("WELOVEIT_V43_MAX_QUERIES", "12"))
+
+TICKET_LINK_HINTS = [
+    "ticket", "tickets", "biglietti", "biglietto", "buy", "book", "booking", "prenota",
+    "acquista", "eventbrite", "ticketone", "ticketmaster", "dice.fm", "feverup", "ra.co",
+    "vivenu", "ticketek", "pia.jp", "eplus.jp", "l-tike", "lawson", "rakuten", "ぴあ", "チケット",
+]
+
+TRUSTED_EVENT_DOMAINS_BY_CITY = {
+    "roma": [
+        "romatoday.it/eventi", "turismoroma.it", "wantedinrome.com/whatson", "auditorium.com",
+        "operaroma.it", "maxxi.art", "palazzoesposizioniroma.it", "ticketone.it", "eventbrite.it",
+        "dice.fm", "feverup.com", "ra.co/events/it/rome",
+    ],
+    "rome": [
+        "romatoday.it/eventi", "turismoroma.it", "wantedinrome.com/whatson", "auditorium.com",
+        "operaroma.it", "maxxi.art", "ticketone.it", "eventbrite.it", "dice.fm", "feverup.com",
+    ],
+    "paris": [
+        "parisjetaime.com", "sortiraparis.com", "accorarena.com", "philharmoniedeparis.fr",
+        "ticketmaster.fr", "eventbrite.fr", "dice.fm", "feverup.com", "ra.co/events/fr/paris",
+    ],
+    "tokyo": [
+        "tokyocheapo.com/events", "tokyoweekender.com/events", "tokyo-dome.co.jp", "bigsight.jp",
+        "eplus.jp", "t.pia.jp", "l-tike.com", "ticket.rakuten.co.jp", "jleague.jp", "npb.jp",
+        "sumo.or.jp", "anime-japan.jp", "eventbrite.com", "ra.co/events/jp/tokyo",
+    ],
+    "london": [
+        "visitlondon.com", "timeout.com/london", "ticketmaster.co.uk", "dice.fm", "eventbrite.co.uk",
+        "ra.co/events/uk/london", "wembleystadium.com", "theo2.co.uk",
+    ],
+    "new york": [
+        "timeout.com/newyork", "nyc.com/events", "ticketmaster.com", "eventbrite.com", "dice.fm",
+        "ra.co/events/us/newyork", "msg.com", "barclayscenter.com",
+    ],
+}
+
+
+def domain_from_url(url: str) -> str:
+    try:
+        return urllib.parse.urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+
+def link_looks_like_ticket(url: str, text: str = "") -> bool:
+    combo = slug(f"{url} {text}")
+    return any(h in combo for h in TICKET_LINK_HINTS)
+
+
+def extract_ticket_links_from_html(html_text: str, base_url: str, limit: int = 6) -> List[Dict[str, str]]:
+    links: List[Dict[str, str]] = []
+    seen = set()
+    for href, label in re.findall(r'<a\b[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]{0,240}?)</a>', html_text or "", flags=re.I):
+        u = absolute_url(base_url, href)
+        if not u:
+            continue
+        text = strip_html_tags(label)
+        if not link_looks_like_ticket(u, text):
+            continue
+        key = u.split("#")[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        links.append({"url": u, "label": text[:80] or domain_from_url(u) or "Ticket link"})
+        if len(links) >= limit:
+            break
+    return links
+
+
+def build_v43_search_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
+    city = location.get("city") or ""
+    city_key = slug(city)
+    country_name = location.get("country_name") or location.get("country_code") or ""
+    year = (parse_date_safe(from_date) or date.today()).year
+
+    if category == "sport":
+        intents = ["sports events tickets", "football rugby tennis basketball tickets", "official fixtures tickets"]
+    elif category == "concert":
+        intents = ["concerts tickets", "live music tickets", "festivals tickets", "jazz concerts"]
+    elif category == "culture":
+        intents = ["exhibitions theatre opera events", "museums events", "food festivals events"]
+    else:
+        intents = [
+            "events tickets", "concerts tickets", "live music events", "sports events tickets",
+            "theatre exhibitions festivals", "things to do events",
+        ]
+
+    queries: List[str] = []
+    # broad search with date window words
+    for intent in intents:
+        queries.append(f"{city} {country_name} {intent} {year}")
+        queries.append(f"{city} events from {from_date} to {to_date} {intent}")
+
+    # trusted/local verticals via site: searches
+    domains = TRUSTED_EVENT_DOMAINS_BY_CITY.get(city_key, [])
+    if city_key == "roma":
+        domains += TRUSTED_EVENT_DOMAINS_BY_CITY.get("rome", [])
+    for d in domains:
+        for intent in intents[:3]:
+            queries.append(f"site:{d} {city} {intent} {year}")
+
+    # de-dup and cap
+    final: List[str] = []
+    seen = set()
+    for q in queries:
+        k = q.lower()
+        if k not in seen:
+            seen.add(k)
+            final.append(q)
+    return final[:V43_MAX_QUERIES]
+
+
+def serpapi_google_organic(query: str, location: Dict[str, str]) -> List[Dict[str, Any]]:
+    if not SERPAPI_API_KEY:
+        return []
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": SERPAPI_API_KEY,
+        "hl": "en",
+        "gl": (location.get("country_code") or "us").lower(),
+        "num": V43_MAX_GOOGLE_RESULTS_PER_QUERY,
+    }
+    ok, status, data, _ = http_get_json("https://serpapi.com/search.json", params)
+    if not ok or status != 200:
+        return []
+    return data.get("organic_results") or []
+
+
+def make_event_from_search_snippet_v43(
+    item: Dict[str, Any],
+    query: str,
+    location: Dict[str, str],
+    from_date: str,
+    to_date: str,
+) -> Optional[Dict[str, Any]]:
+    title = clean_text(item.get("title") or "")
+    snippet = clean_text(item.get("snippet") or "")
+    link = item.get("link")
+    if not title or not link:
+        return None
+    combined = " ".join([title, snippet, clean_text(item.get("displayed_link") or ""), query])
+    if result_year_conflicts(combined, from_date, to_date):
+        return None
+    if title_is_bad(title, link, ""):
+        return None
+    d, t, confidence = parse_discovery_date_from_text(combined, from_date, to_date)
+    if not d or not confidence:
+        return None
+    temp = {"title": title, "start_date": d, "city": location.get("city"), "country": location.get("country_code"), "source_url": link}
+    if not is_within_dates(temp, from_date, to_date):
+        return None
+    cat, sub = category_from_title(title, "")
+    return make_event(
+        title=title,
+        category=cat,
+        subcategory=sub,
+        start_date=d,
+        start_time=t,
+        city=location.get("city") or "",
+        country=location.get("country_code") or "",
+        venue="",
+        source_name="AI Search Extraction",
+        source_url=link,
+        ticket_url=link,
+        image_url=None,
+        extra={
+            "v43_ai_search_extraction": True,
+            "v43_extraction_method": "google_snippet_explicit_date",
+            "date_confidence": 0.86,
+            "search_query": query,
+            "source_domain": domain_from_url(link),
+        },
+    )
+
+
+def extract_page_events_v43(
+    url: str,
+    source_name: str,
+    location: Dict[str, str],
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> List[Dict[str, Any]]:
+    ok, status, body, final_url = http_get_text(url)
+    if not ok or status >= 400 or not body:
+        return []
+
+    ticket_links = extract_ticket_links_from_html(body, final_url)
+    default_ticket_url = ticket_links[0]["url"] if ticket_links else final_url
+
+    events = parse_jsonld_events_from_html(body, final_url, location, source_name)
+    events.extend(parse_anchor_local_events(body, final_url, location, source_name, from_date, to_date))
+
+    # If the page itself is an event page with meta title + explicit date in body, extract one event.
+    if not events:
+        title = ""
+        og = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', body, flags=re.I)
+        if og:
+            title = clean_text(html.unescape(og.group(1)))
+        if not title:
+            h1 = re.search(r'<h1[^>]*>([\s\S]{3,220}?)</h1>', body, flags=re.I)
+            if h1:
+                title = strip_html_tags(h1.group(1))
+        text_sample = strip_html_tags(body[:25000])
+        d, t, confidence = parse_discovery_date_from_text(text_sample, from_date, to_date)
+        if title and d and confidence and not title_is_bad(title, final_url, category):
+            cat, sub = category_from_title(title, category)
+            events.append(make_event(
+                title=title,
+                category=cat,
+                subcategory=sub,
+                start_date=d,
+                start_time=t,
+                city=location.get("city") or "",
+                country=location.get("country_code") or "",
+                venue="",
+                source_name=source_name,
+                source_url=final_url,
+                ticket_url=default_ticket_url,
+                image_url=None,
+                extra={"v43_ai_search_extraction": True, "v43_extraction_method": "page_meta_explicit_date", "date_confidence": 0.88},
+            ))
+
+    clean_events: List[Dict[str, Any]] = []
+    for ev in events:
+        if not is_within_dates(ev, from_date, to_date):
+            continue
+        if category:
+            ev_cat = ev.get("category")
+            if category == "sport" and ev_cat not in {"sport", "motorsport"}:
+                continue
+            if category != "sport" and ev_cat != category:
+                continue
+        ev["ticket_candidates"] = ticket_links
+        if (not ev.get("ticket_url")) or ev.get("ticket_url") == ev.get("source_url"):
+            ev["ticket_url"] = default_ticket_url
+        ev["source_priority"] = "ai_search_extracted"
+        ev["v43_verified_real_page"] = True
+        clean_events.append(ev)
+    return clean_events[:20]
+
+
+def ai_search_extraction_events_v43(location: Dict[str, str], from_date: str, to_date: str, category: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not ENABLE_AI_SEARCH_EXTRACTION or not SERPAPI_API_KEY:
+        return [], {"enabled": ENABLE_AI_SEARCH_EXTRACTION, "serpapi": bool(SERPAPI_API_KEY), "queries": []}
+
+    queries = build_v43_search_queries(location, from_date, to_date, category)
+    out: List[Dict[str, Any]] = []
+    fetched_pages = 0
+    seen_urls = set()
+
+    for q in queries:
+        for item in serpapi_google_organic(q, location):
+            link = item.get("link")
+            if not link or link in seen_urls:
+                continue
+            seen_urls.add(link)
+
+            snippet_ev = make_event_from_search_snippet_v43(item, q, location, from_date, to_date)
+            if snippet_ev:
+                out.append(snippet_ev)
+
+            # Fetch promising pages only. This is the key: read the real page, don't invent.
+            domain = domain_from_url(link)
+            item_text = slug(" ".join([item.get("title") or "", item.get("snippet") or "", link]))
+            promising = (
+                any(h in item_text for h in ["event", "eventi", "tickets", "biglietti", "programma", "calendar", "concert", "festival"])
+                or any(d.replace("site:", "") in link for d in TRUSTED_EVENT_DOMAINS_BY_CITY.get(slug(location.get("city")), []))
+            )
+            if promising and fetched_pages < V43_MAX_PAGES_TO_FETCH:
+                fetched_pages += 1
+                page_events = extract_page_events_v43(
+                    link,
+                    source_name=f"AI Search: {domain or 'web'}",
+                    location=location,
+                    from_date=from_date,
+                    to_date=to_date,
+                    category=category,
+                )
+                for ev in page_events:
+                    ev["search_query"] = q
+                    out.append(ev)
+            time.sleep(0.03)
+
+    # Deduplicate before returning.
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for ev in out:
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ev)
+
+    diag = {
+        "enabled": True,
+        "queries": queries,
+        "seen_urls": len(seen_urls),
+        "fetched_pages": fetched_pages,
+        "extracted_events": len(unique),
+    }
+    return unique[:120], diag
+
+
+def collect_real_provider_events_v43(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
+    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+    v43_events, v43_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+    events.extend(v43_events)
+    counts["ai_search_extraction_v43"] = len(v43_events)
+    counts["raw_total_with_v43"] = len(events)
+    return events, counts, v43_diag
+
+
+@app.get("/debug/ai-search-extraction")
+def debug_ai_search_extraction(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query(""),
+) -> Dict[str, Any]:
+    loc = normalize_location(city, country)
+    cat = normalize_category(category)
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or (fd + timedelta(days=30))
+    if td < fd:
+        td = fd
+    events, diag = ai_search_extraction_events_v43(loc, fd.isoformat(), td.isoformat(), cat)
+    return {
+        "ok": True,
+        "version": VERSION,
+        "mode": "V43 AI Search Extraction Engine",
+        "normalized": loc,
+        "diagnostics": diag,
+        "count": len(events),
+        "sample": events[:40],
+    }
+
+
 @app.get("/discovery-sources")
 def discovery_sources_endpoint(
     city: str = Query(...),
@@ -2808,8 +3168,8 @@ def get_events(
     from_date: str = Query(default_factory=today_iso),
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
     category: str = Query(""),
-    diagnostics: bool = Query(False, description="Return events plus V41 diagnostics"),
-    use_cache: bool = Query(True, description="Use in-memory V41 cache"),
+    diagnostics: bool = Query(False, description="Return events plus V43 diagnostics"),
+    use_cache: bool = Query(True, description="Use in-memory V43 cache"),
     write_snapshot: bool = Query(False, description="Write a JSON snapshot for regression tests"),
 ) -> JSONResponse:
     loc = normalize_location(city, country)
@@ -2821,7 +3181,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v42-real-local-sources|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v43-ai-search-extraction|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -2831,8 +3191,8 @@ def get_events(
                 return JSONResponse({"events": cached_events, "diagnostics": cached_diagnostics})
             return JSONResponse(cached_events)
 
-    # V41: real providers only. No fake source cards, no synthetic fallback events.
-    all_events, provider_counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+    # V43: real providers + AI web extraction. No fake source cards, no synthetic fallback events.
+    all_events, provider_counts, v43_diag = collect_real_provider_events_v43(loc, from_iso, to_iso, cat)
 
     # Remove synthetic cards before merge even if older helper functions produced them.
     real_events: List[Dict[str, Any]] = []
@@ -2872,13 +3232,15 @@ def get_events(
         cache="miss",
     )
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
-    diag["v41_mode"] = "real_events_only_no_fake_fallbacks"
+    diag["v43_mode"] = "ai_meta_search_extraction_real_events_only"
     diag["v42_local_sources_engine"] = True
     diag["v42_local_sources_enabled"] = ENABLE_LOCAL_SOURCES
+    diag["v43_ai_search_extraction_engine"] = True
+    diag["v43_ai_search_extraction"] = v43_diag
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
         "Non abbiamo ancora trovato abbastanza eventi live verificati per questa ricerca. "
-        "Mostrare pochi risultati reali è meglio che inventare eventi."
+        "V43 legge il web, estrae eventi reali e scarta pagine non verificabili."
     )
 
     if write_snapshot:
