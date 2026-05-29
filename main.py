@@ -1316,6 +1316,195 @@ def local_official_fallback(location: Dict[str, str], from_date: str, to_date: s
     return []
 
 
+# =========================
+# V36 CACHE / DIAGNOSTICS FIX
+# =========================
+
+def make_events_cache_key(city: str, country: str, from_iso: str, to_iso: str, cat: str) -> str:
+    """
+    Build stable cache key for /events.
+    """
+    raw = "|".join([
+        str(city or "").strip().lower(),
+        str(country or "").strip().lower(),
+        str(from_iso or "").strip(),
+        str(to_iso or "").strip(),
+        str(cat or "").strip().lower(),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def get_events_cache(cache_key: str) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
+    """
+    Read in-memory events cache.
+    """
+    if not ENABLE_EVENTS_CACHE:
+        return None
+
+    item = _EVENTS_CACHE.get(cache_key)
+    if not item:
+        return None
+
+    created_at, events, diagnostics = item
+    if time.time() - created_at > DISCOVERY_CACHE_TTL_SECONDS:
+        _EVENTS_CACHE.pop(cache_key, None)
+        return None
+
+    cached_diag = dict(diagnostics or {})
+    cached_diag["cache"] = "hit"
+
+    return events, cached_diag
+
+
+def set_events_cache(cache_key: str, events: List[Dict[str, Any]], diagnostics: Dict[str, Any]) -> None:
+    """
+    Store in-memory events cache.
+    """
+    if not ENABLE_EVENTS_CACHE:
+        return
+
+    _EVENTS_CACHE[cache_key] = (time.time(), events, diagnostics)
+
+
+def validate_event_v36(
+    ev: Dict[str, Any],
+    location: Dict[str, str],
+    requested_category: str,
+    from_date: str,
+    to_date: str,
+) -> Tuple[bool, str]:
+    """
+    Final hardening validation before merge.
+    """
+    title = clean_text(ev.get("title"))
+    if not title:
+        return False, "missing_title"
+
+    if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
+        return False, "bad_or_low_quality_title"
+
+    if not ev.get("start_date"):
+        return False, "missing_start_date"
+
+    if not is_within_dates(ev, from_date, to_date):
+        return False, "outside_requested_dates"
+
+    date_confidence = ev.get("date_confidence", 1)
+    try:
+        date_confidence_float = float(date_confidence if date_confidence is not None else 1)
+    except Exception:
+        date_confidence_float = 1
+
+    if date_confidence_float < MIN_DATE_CONFIDENCE:
+        return False, "low_date_confidence"
+
+    combined = " ".join([
+        clean_text(ev.get("title")),
+        clean_text(ev.get("venue")),
+        clean_text(ev.get("city")),
+        clean_text(ev.get("country")),
+        clean_text(ev.get("source_url")),
+    ])
+
+    if result_year_conflicts(combined, from_date, to_date):
+        return False, "wrong_year"
+
+    if location.get("city") and not city_matches(ev, location):
+        source_name = slug(ev.get("source_name"))
+        if "fallback" not in source_name and "search discovery" not in source_name:
+            return False, "wrong_city_or_country"
+
+    if requested_category:
+        ev_category = ev.get("category")
+        if requested_category == "sport":
+            if ev_category not in {"sport", "motorsport"}:
+                return False, "wrong_category"
+        elif ev_category and ev_category != requested_category:
+            return False, "wrong_category"
+
+    return True, "accepted"
+
+
+def log_event_v36(ev: Dict[str, Any], accepted: bool, reason: str) -> None:
+    """
+    Optional debug logging for V36 event filtering.
+    """
+    if not ENABLE_DIAGNOSTICS_LOG:
+        return
+
+    logger.debug(
+        "event_v36 accepted=%s reason=%s source=%s date=%s title=%s",
+        accepted,
+        reason,
+        ev.get("source_name"),
+        ev.get("start_date"),
+        ev.get("title"),
+    )
+
+
+def build_events_diagnostics(
+    *,
+    loc: Dict[str, str],
+    category: str,
+    from_iso: str,
+    to_iso: str,
+    provider_counts: Dict[str, int],
+    raw_count: int,
+    merged_count: int,
+    discard_reasons: Dict[str, int],
+    cache: str,
+) -> Dict[str, Any]:
+    """
+    Build diagnostics payload for /events?diagnostics=true.
+    """
+    return {
+        "ok": True,
+        "version": VERSION,
+        "normalized": loc,
+        "category": category,
+        "from_date": from_iso,
+        "to_date": to_iso,
+        "provider_counts": provider_counts,
+        "raw_count": raw_count,
+        "merged_count": merged_count,
+        "discard_reasons": discard_reasons,
+        "cache": cache,
+        "cache_enabled": ENABLE_EVENTS_CACHE,
+        "cache_ttl_seconds": DISCOVERY_CACHE_TTL_SECONDS,
+        "min_date_confidence": MIN_DATE_CONFIDENCE,
+    }
+
+
+def save_events_snapshot(
+    events: List[Dict[str, Any]],
+    diagnostics: Dict[str, Any],
+    *,
+    city: str,
+    country: str,
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> str:
+    """
+    Save snapshot JSON file for regression/debug.
+    """
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+    safe_name = slug(f"{city}-{country}-{from_date}-{to_date}-{category}") or "events"
+    safe_name = re.sub(r"[^a-z0-9\-]+", "-", safe_name.lower()).strip("-")
+    filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{safe_name}.json"
+    path = SNAPSHOT_DIR / filename
+
+    payload = {
+        "created_at": datetime.utcnow().isoformat() + "+00:00",
+        "events": events,
+        "diagnostics": diagnostics,
+    }
+
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
+
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
