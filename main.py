@@ -1104,11 +1104,15 @@ def merge_events(
             best[k] = apply_smart_ticket_merge(ev)
 
     result = list(best.values())
+
+    # V44: chronological UX first.
+    # When the user searches a date range, results must read like an agenda:
+    # June before July before December. AI score is used only inside the same day/time.
     result.sort(
         key=lambda e: (
-            -(e.get("ai_score") or 0),
             e.get("start_date") or "9999-99-99",
             e.get("start_time") or "99:99:99",
+            -(e.get("ai_score") or 0),
         )
     )
 
@@ -3181,7 +3185,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v43-ai-search-extraction|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v44-date-ux-chronological|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -3236,6 +3240,8 @@ def get_events(
     diag["v42_local_sources_engine"] = True
     diag["v42_local_sources_enabled"] = ENABLE_LOCAL_SOURCES
     diag["v43_ai_search_extraction_engine"] = True
+    diag["v44_chronological_sorting"] = True
+    diag["v44_year_input_limit_frontend"] = True
     diag["v43_ai_search_extraction"] = v43_diag
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
