@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v38
+# main.py — WELOVEIT Events API v40
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -28,7 +28,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v39-brutal-expanded-major-city"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v40-premium-merge-japan"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -58,7 +58,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v38")
+logger = logging.getLogger("weloveit.events.v40")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -951,6 +951,93 @@ def dedupe_key(ev: Dict[str, Any]) -> str:
     return f"{title[:70]}|{d}|{venue[:40]}"
 
 
+
+def is_real_ticket_url(url: Any) -> bool:
+    u = str(url or '').strip()
+    if not u:
+        return False
+    low = u.lower()
+    if low.startswith('https://www.google.com/search'):
+        return False
+    return low.startswith('http://') or low.startswith('https://')
+
+
+def official_source_rank(source_name: Any, url: Any) -> int:
+    s = slug(source_name)
+    u = str(url or '').lower()
+    rank = 0
+    if any(x in s for x in ['ticketmaster', 'eventbrite', 'seatgeek', 'ticket pia', 'pia', 'lawson', 'eplus', 'rakuten']):
+        rank += 40
+    if any(x in s for x in ['official', 'club', 'venue']):
+        rank += 25
+    if any(x in u for x in ['ticketmaster', 'eventbrite', 'seatgeek', 'eplus.jp', 'pia.jp', 'l-tike.com', 'rakuten', 'jleague', 'npb.jp', 'sumo.or.jp']):
+        rank += 30
+    if 'google.com/search' in u:
+        rank -= 25
+    return rank
+
+
+def collect_ticket_links(*items: Dict[str, Any]) -> List[Dict[str, Any]]:
+    seen = set()
+    links: List[Dict[str, Any]] = []
+    for ev in items:
+        if not ev:
+            continue
+        source = ev.get('source_name') or ev.get('source') or 'Fonte evento'
+        for key in ['ticket_url', 'source_url', 'url']:
+            url = ev.get(key)
+            if not is_real_ticket_url(url):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            links.append({
+                'source': source,
+                'url': url,
+                'official_rank': official_source_rank(source, url),
+            })
+        for existing in ev.get('ticket_links') or []:
+            url = existing.get('url') if isinstance(existing, dict) else None
+            if not is_real_ticket_url(url) or url in seen:
+                continue
+            seen.add(url)
+            links.append(existing)
+    links.sort(key=lambda x: -(x.get('official_rank') or 0))
+    return links[:8]
+
+
+def apply_smart_ticket_merge(target: Dict[str, Any], *others: Dict[str, Any]) -> Dict[str, Any]:
+    all_items = [target] + [x for x in others if x]
+    ticket_links = collect_ticket_links(*all_items)
+    if ticket_links:
+        target['ticket_links'] = ticket_links
+        best_link = ticket_links[0]
+        target['official_source_url'] = best_link.get('url')
+        target['official_source_name'] = best_link.get('source')
+        if not is_real_ticket_url(target.get('ticket_url')) or official_source_rank(best_link.get('source'), best_link.get('url')) > official_source_rank(target.get('source_name'), target.get('ticket_url')):
+            target['ticket_url'] = best_link.get('url')
+
+    prices = []
+    for ev in all_items:
+        try:
+            p = ev.get('price_min')
+            if p is not None and p != '':
+                prices.append(float(p))
+        except Exception:
+            pass
+    if prices:
+        best_price = min(prices)
+        target['best_price'] = best_price
+        if target.get('price_min') in {None, ''} or float(target.get('price_min') or best_price) > best_price:
+            target['price_min'] = best_price
+
+    merged_sources = []
+    for ev in all_items:
+        merged_sources += ev.get('merged_sources') or [ev.get('source_name') or ev.get('source') or 'Fonte evento']
+    target['merged_sources'] = sorted(list(set([x for x in merged_sources if x])))
+    target['multi_provider_merged'] = len(target['merged_sources']) > 1
+    return target
+
 def merge_events(
     events: List[Dict[str, Any]],
     location: Dict[str, str],
@@ -960,11 +1047,12 @@ def merge_events(
     diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    V36 merge:
-    - keeps V34 source priority + dedupe
-    - adds V35 hardening validation
-    - records discard reasons
-    - refuses fake/low-confidence/wrong-year dates
+    V40 intelligent merge:
+    - soft validation, not destructive filtering
+    - AI anti-duplicate key
+    - merges ticket links from multiple providers
+    - selects best/most official ticket URL
+    - keeps best price when provider prices exist
     """
     cleaned: List[Dict[str, Any]] = []
     discard_reasons: Dict[str, int] = {}
@@ -989,20 +1077,21 @@ def merge_events(
         k = dedupe_key(ev)
         old = best.get(k)
 
-        if not old or compute_score(ev, location, requested_category) > compute_score(old, location, requested_category):
-            if old:
-                if not ev.get("image_url") and old.get("image_url"):
-                    ev["image_url"] = old["image_url"]
-                if (not ev.get("ticket_url") or "google.com/search" in str(ev.get("ticket_url"))) and old.get("ticket_url"):
-                    ev["ticket_url"] = old["ticket_url"]
-                ev["merged_sources"] = sorted(list(set(
-                    (old.get("merged_sources") or [old.get("source_name")]) +
-                    (ev.get("merged_sources") or [ev.get("source_name")])
-                )))
-            else:
-                ev["merged_sources"] = sorted(list(set(ev.get("merged_sources") or [ev.get("source_name")])))
+        if old:
+            old_score = compute_score(old, location, requested_category)
+            new_score = compute_score(ev, location, requested_category)
+            winner = ev if new_score >= old_score else old
+            loser = old if winner is ev else ev
 
-            best[k] = ev
+            if not winner.get("image_url") and loser.get("image_url"):
+                winner["image_url"] = loser["image_url"]
+
+            winner = apply_smart_ticket_merge(winner, loser)
+            winner["ai_score"] = max(old_score, new_score)
+            winner["quality_score"] = winner["ai_score"]
+            best[k] = winner
+        else:
+            best[k] = apply_smart_ticket_merge(ev)
 
     result = list(best.values())
     result.sort(
@@ -1017,9 +1106,11 @@ def merge_events(
         diagnostics["discard_reasons"] = discard_reasons
         diagnostics["accepted_before_dedupe"] = len(cleaned)
         diagnostics["deduped_count"] = len(result)
+        diagnostics["v40_multi_provider_merge"] = True
+        diagnostics["v40_best_price"] = True
+        diagnostics["v40_official_source_selection"] = True
 
     return result[:MAX_FINAL_EVENTS]
-
 
 
 def ticketmaster_events(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
@@ -2004,6 +2095,11 @@ def root() -> Dict[str, Any]:
         "v37_ticket_source_aggregation": True,
         "v38_soft_ranking_no_overfilter": True,
         "v39_brutal_expansion": True,
+        "v40_multi_provider_merge": True,
+        "v40_best_price": True,
+        "v40_official_source_selection": True,
+        "v40_premium_travel_planner": True,
+        "v40_japan_deep_sources": True,
         "v39_all_categories_when_tutte": True,
         "v39_major_city_minimum_results": True,
         "seatgeek_auth_mode": "client_id_only",
@@ -2477,7 +2573,7 @@ def ai_travel_plan(
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=3)).isoformat()),
     interests: str = Query("events,food,nightlife,culture"),
 ) -> Dict[str, Any]:
-    """WELOVEIT Premium Mode: light AI-style travel plan generated from live event engine + local intent."""
+    """WELOVEIT Premium Mode: AI Travel Operating System style planner."""
     loc = normalize_location(city, country)
     fd = parse_date_safe(from_date) or date.today()
     td = parse_date_safe(to_date) or (fd + timedelta(days=2))
@@ -2499,40 +2595,54 @@ def ai_travel_plan(
     for ev in events:
         events_by_day.setdefault(ev.get("start_date", ""), []).append(ev)
 
+    interest_list = [x.strip().lower() for x in interests.split(",") if x.strip()]
+    city_name = loc["city"]
+    country_code = loc.get("country_code")
+
+    if country_code == "JP":
+        food = "Ramen/izakaya near the final venue; reserve time for train transfers."
+        transport = "Use Suica/PASMO, Google Maps rail routing, and avoid last-train risk after nightlife."
+        ticket_sources = ["eplus", "Ticket Pia", "Lawson Ticket", "Rakuten Ticket", "J.League", "NPB", "Sumo official", "anime/game official pages"]
+        hotels = "Stay near Shinjuku, Ginza/Tokyo Station, Shibuya, Ueno or the venue rail line."
+        nightlife = "Jazz bars, listening bars, karaoke, Golden Gai, Ebisu, Roppongi or Shibuya depending on style."
+    else:
+        food = "Choose dinner within 20-30 minutes of the evening venue."
+        transport = "Use metro/train first; taxis only late night or with luggage."
+        ticket_sources = ["Ticketmaster", "SeatGeek", "Eventbrite", "official venue", "local ticketing partners"]
+        hotels = f"Stay central in {city_name}, close to transit and main venues."
+        nightlife = "Pick one compact nightlife area near hotel or event venue."
+
     days = []
     current = fd
     while current <= td:
         day_iso = current.isoformat()
-        day_events = sorted(events_by_day.get(day_iso, []), key=lambda e: -(e.get("quality_score") or 0))[:5]
+        day_events = sorted(events_by_day.get(day_iso, []), key=lambda e: -(e.get("quality_score") or 0))[:6]
         top_event = day_events[0] if day_events else None
-
-        city_name = loc["city"]
-        if loc.get("country_code") == "JP":
-            morning = f"Start with a calm local area walk in {city_name}, then check department-store food halls or a classic kissaten."
-            afternoon = "Use Japan local sources: eplus, Ticket Pia, Lawson Ticket, Rakuten Ticket, J.League, NPB and sumo official pages."
-            dinner = "Book ramen/izakaya near the event area; keep 45-60 minutes for train transfers."
-        else:
-            morning = f"Start in the historic/central area of {city_name}, then keep the afternoon flexible for tickets and transfers."
-            afternoon = "Check official ticket links first, then compare marketplace and Eventbrite fallback links."
-            dinner = "Choose dinner close to the venue to avoid traffic and late arrival risk."
 
         days.append({
             "date": day_iso,
-            "morning": morning,
-            "afternoon": afternoon,
-            "evening": top_event or "No strong live event found yet; use the official fallback sources.",
+            "morning": f"Start with a signature neighborhood walk in {city_name}; keep this low-effort before the live plan.",
+            "lunch": food,
+            "afternoon": "Check official sources first, then compare provider links and local fallback cards.",
+            "evening": top_event or "No high-confidence event on this exact day yet; use ticket source cards and broaden date/category.",
+            "nightlife": nightlife,
+            "transport_note": transport,
             "top_events": day_events,
         })
         current += timedelta(days=1)
 
     return {
         "ok": True,
-        "mode": "WELOVEIT Premium AI Travel Planner",
-        "city": loc["city"],
-        "country": loc["country_code"],
+        "mode": "WELOVEIT Premium AI Travel Operating System",
+        "city": city_name,
+        "country": country_code,
         "from_date": fd.isoformat(),
         "to_date": td.isoformat(),
-        "interests": [x.strip() for x in interests.split(",") if x.strip()],
+        "interests": interest_list,
+        "hotel_strategy": hotels,
+        "transport_strategy": transport,
+        "local_ticket_sources": ticket_sources,
+        "weather_placeholder": "Ready for weather integration in frontend or dedicated weather API.",
         "total_events_considered": len(events),
         "days": days,
     }
