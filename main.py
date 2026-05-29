@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v37
+# main.py — WELOVEIT Events API v38
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -28,7 +28,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v37-premium-upgrades"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v38-soft-ranking-major-city"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -58,7 +58,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v36")
+logger = logging.getLogger("weloveit.events.v38")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -110,6 +110,12 @@ def validate_event_v36(
     from_date: str,
     to_date: str,
 ) -> Tuple[bool, str]:
+    """
+    V38 soft validation:
+    - keep only hard safety/date checks as rejection
+    - do NOT kill useful events only because city/category/source is imperfect
+    - ranking handles quality; validation only removes clearly unusable records
+    """
     title = clean_text(ev.get("title"))
     if not title:
         return False, "missing_title"
@@ -120,10 +126,13 @@ def validate_event_v36(
     if not is_within_dates(ev, from_date, to_date):
         return False, "outside_requested_dates"
 
-    if not city_matches(ev, location):
-        return False, "city_country_mismatch"
+    source_name = slug(ev.get("source_name"))
+    status = slug(ev.get("status"))
 
-    if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
+    # Fallback/source cards are intentionally broader: keep them if dates match.
+    is_source_card = status == "fallback" or "fallback" in source_name or "official" in source_name
+
+    if not is_source_card and title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
         return False, "bad_or_low_quality_title"
 
     combined = " ".join([
@@ -136,23 +145,30 @@ def validate_event_v36(
     if result_year_conflicts(combined, from_date, to_date):
         return False, "wrong_year_conflict"
 
+    # V38: city mismatch becomes a warning, not a hard rejection.
+    if not city_matches(ev, location):
+        ev["location_warning"] = "soft_city_country_mismatch"
+
+    # V38: low confidence becomes ranking penalty, not deletion.
     confidence = ev.get("date_confidence")
     try:
         if confidence is not None and float(confidence) < MIN_DATE_CONFIDENCE:
-            return False, "low_date_confidence"
+            ev["date_confidence_warning"] = "soft_low_date_confidence"
     except Exception:
         pass
 
+    # V38: category mismatch becomes ranking penalty, not deletion.
     if requested_category:
         ev_cat = ev.get("category")
+        category_ok = False
         if requested_category == "sport":
-            if ev_cat not in {"sport", "motorsport"}:
-                return False, "category_mismatch"
-        elif ev_cat and ev_cat != requested_category:
-            return False, "category_mismatch"
+            category_ok = ev_cat in {"sport", "motorsport"}
+        else:
+            category_ok = (not ev_cat) or ev_cat == requested_category
+        if not category_ok:
+            ev["category_warning"] = "soft_category_mismatch"
 
     return True, "accepted"
-
 
 def log_event_v36(ev: Dict[str, Any], accepted: bool, reason: str) -> None:
     if not ENABLE_DIAGNOSTICS_LOG:
@@ -1734,52 +1750,237 @@ def roma_tennis_override(location: Dict[str, str], from_date: str, to_date: str,
     return [ev] if is_within_dates(ev, from_date, to_date) else []
 
 
+def make_source_fallback_event(
+    *,
+    title: str,
+    subcategory: str,
+    city: str,
+    country: str,
+    from_date: str,
+    venue: str,
+    url: str,
+    category: str = "culture",
+    source_name: str = "Official Source Fallback",
+) -> Dict[str, Any]:
+    return make_event(
+        title=title,
+        category=category or "culture",
+        subcategory=subcategory,
+        start_date=from_date,
+        city=city,
+        country=country,
+        venue=venue,
+        source_name=source_name,
+        source_url=url,
+        ticket_url=url,
+        status="fallback",
+        extra={"v38_source_card": True, "date_confidence": 0.99},
+    )
+
+
+def google_search_url(query: str) -> str:
+    return "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+
+
 def local_official_fallback(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    """
+    V38 source cards: used only when real providers return too few events.
+    These are not fake events; they are official discovery/ticket source cards.
+    """
+    city = location.get("city") or ""
+    country = location.get("country_code") or ""
+    city_slug = slug(city)
+    out: List[Dict[str, Any]] = []
+
     if category == "sport" and is_rome(location):
-        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(
-            f"Roma sport events {from_date} {to_date} official tickets Foro Italico Stadio Olimpico"
-        )
-        return [make_event(
-            title="Rome official sport ticket sources",
-            category="sport",
-            subcategory="Official ticket sources",
-            start_date=from_date,
-            city="Roma",
-            country="IT",
-            venue="Foro Italico / Stadio Olimpico / official clubs",
-            source_name="Sports Official Fallback",
-            source_url=url,
-            ticket_url=url,
-            status="fallback",
-            extra={
-                "official_sources": ["Internazionali BNL d'Italia", "AS Roma", "SS Lazio", "CONI", "TicketOne"],
-            },
-        )]
+        out.extend([
+            make_source_fallback_event(
+                title="Rome official sport ticket sources",
+                subcategory="Official sport sources",
+                city="Roma",
+                country="IT",
+                from_date=from_date,
+                venue="Foro Italico / Stadio Olimpico / official clubs",
+                url=google_search_url(f"Roma sport events {from_date} {to_date} official tickets Foro Italico Stadio Olimpico"),
+                category="sport",
+                source_name="Sports Official Fallback",
+            ),
+            make_source_fallback_event(
+                title="AS Roma official tickets and fixtures",
+                subcategory="Football",
+                city="Roma",
+                country="IT",
+                from_date=from_date,
+                venue="Stadio Olimpico",
+                url="https://www.asroma.com/en/tickets",
+                category="sport",
+                source_name="Sports Official Fallback",
+            ),
+            make_source_fallback_event(
+                title="SS Lazio official tickets and fixtures",
+                subcategory="Football",
+                city="Roma",
+                country="IT",
+                from_date=from_date,
+                venue="Stadio Olimpico",
+                url="https://www.sslazio.it/en/tickets",
+                category="sport",
+                source_name="Sports Official Fallback",
+            ),
+        ])
 
-    if location.get("country_code") == "JP":
-        q = urllib.parse.quote_plus(
-            f"{location['city']} Japan events {from_date} {to_date} eplus pia lawson rakuten tokyo dome jleague npb sumo official tickets"
-        )
-        url = "https://www.google.com/search?q=" + q
-        return [make_event(
-            title=f"{location['city']} official Japan ticket sources",
-            category=category or "culture",
-            subcategory="Japan local ticket sources",
-            start_date=from_date,
-            city=location["city"],
-            country="JP",
-            venue="eplus / Pia / Lawson Ticket / Rakuten Ticket",
-            source_name="Japan Official Fallback",
-            source_url=url,
-            ticket_url=url,
-            status="fallback",
-            extra={
-                "official_sources": JAPAN_LOCAL_DOMAINS,
-                "japan_local_sources": True,
-            },
-        )]
+    if country == "JP" or city_slug in {"tokyo", "osaka", "kyoto", "yokohama", "himeji", "kobe"}:
+        jp_city = city or "Tokyo"
+        out.extend([
+            make_source_fallback_event(
+                title=f"{jp_city} official Japan ticket sources",
+                subcategory="Japan local ticket sources",
+                city=jp_city,
+                country="JP",
+                from_date=from_date,
+                venue="eplus / Pia / Lawson Ticket / Rakuten Ticket",
+                url=google_search_url(f"{jp_city} Japan events {from_date} {to_date} eplus pia lawson rakuten tokyo dome jleague npb sumo official tickets"),
+                category=category or "culture",
+                source_name="Japan Official Fallback",
+            ),
+            make_source_fallback_event(
+                title=f"{jp_city} concerts and live music official tickets",
+                subcategory="Concerts",
+                city=jp_city,
+                country="JP",
+                from_date=from_date,
+                venue="Tokyo Dome / Budokan / Zepp / Billboard Live",
+                url=google_search_url(f"{jp_city} concerts live music {from_date} {to_date} official tickets eplus pia lawson"),
+                category="concert",
+                source_name="Japan Official Fallback",
+            ),
+            make_source_fallback_event(
+                title=f"{jp_city} sports fixtures official tickets",
+                subcategory="Sports",
+                city=jp_city,
+                country="JP",
+                from_date=from_date,
+                venue="J.League / NPB / Sumo / Rugby",
+                url=google_search_url(f"{jp_city} sports fixtures tickets J League NPB sumo rugby {from_date} {to_date}"),
+                category="sport",
+                source_name="Japan Official Fallback",
+            ),
+            make_source_fallback_event(
+                title=f"{jp_city} anime game and pop culture events",
+                subcategory="Anime / Pop culture",
+                city=jp_city,
+                country="JP",
+                from_date=from_date,
+                venue="Tokyo Big Sight / Makuhari Messe / Anime venues",
+                url=google_search_url(f"{jp_city} anime game pop culture events {from_date} {to_date} tickets"),
+                category="culture",
+                source_name="Japan Official Fallback",
+            ),
+            make_source_fallback_event(
+                title=f"{jp_city} food festivals and nightlife events",
+                subcategory="Food / Nightlife",
+                city=jp_city,
+                country="JP",
+                from_date=from_date,
+                venue="Local festivals / clubs / food events",
+                url=google_search_url(f"{jp_city} food festival nightlife events {from_date} {to_date}"),
+                category="culture",
+                source_name="Japan Official Fallback",
+            ),
+        ])
 
-    return []
+    if country == "FR" or city_slug == "paris":
+        out.extend([
+            make_source_fallback_event(
+                title="Paris official ticket sources",
+                subcategory="Paris ticket sources",
+                city="Paris",
+                country="FR",
+                from_date=from_date,
+                venue="Ticketmaster France / Fnac Spectacles / See Tickets",
+                url=google_search_url(f"Paris events {from_date} {to_date} official tickets Ticketmaster France Fnac Spectacles See Tickets"),
+                category=category or "culture",
+                source_name="France Official Fallback",
+            ),
+            make_source_fallback_event(
+                title="Paris concerts at Accor Arena and La Défense Arena",
+                subcategory="Concerts",
+                city="Paris",
+                country="FR",
+                from_date=from_date,
+                venue="Accor Arena / Paris La Défense Arena / Olympia",
+                url=google_search_url(f"Paris concerts Accor Arena La Defense Arena Olympia {from_date} {to_date} tickets"),
+                category="concert",
+                source_name="France Official Fallback",
+            ),
+            make_source_fallback_event(
+                title="Paris sport fixtures and major events",
+                subcategory="Sports",
+                city="Paris",
+                country="FR",
+                from_date=from_date,
+                venue="Roland-Garros / Parc des Princes / Stade de France",
+                url=google_search_url(f"Paris sport events Roland Garros Parc des Princes Stade de France {from_date} {to_date} tickets"),
+                category="sport",
+                source_name="France Official Fallback",
+            ),
+            make_source_fallback_event(
+                title="Paris exhibitions theatre and culture",
+                subcategory="Culture",
+                city="Paris",
+                country="FR",
+                from_date=from_date,
+                venue="Museums / theatres / exhibitions",
+                url=google_search_url(f"Paris exhibitions theatre culture events {from_date} {to_date} official tickets"),
+                category="culture",
+                source_name="France Official Fallback",
+            ),
+        ])
+
+    major_city_generic = {
+        "london": ("GB", ["O2 Arena", "Wembley", "Royal Albert Hall", "London theatres"]),
+        "new york": ("US", ["Madison Square Garden", "Barclays Center", "Broadway", "MetLife Stadium"]),
+        "madrid": ("ES", ["WiZink Center", "Santiago Bernabéu", "Theatres", "Festivals"]),
+        "barcelona": ("ES", ["Palau Sant Jordi", "Camp Nou", "Festivals", "Theatres"]),
+        "berlin": ("DE", ["Uber Arena", "Olympiastadion", "Clubs", "Museums"]),
+    }
+    if city_slug in major_city_generic:
+        cc, venues = major_city_generic[city_slug]
+        out.extend([
+            make_source_fallback_event(
+                title=f"{city} official event ticket sources",
+                subcategory="Official ticket sources",
+                city=city,
+                country=cc,
+                from_date=from_date,
+                venue=" / ".join(venues),
+                url=google_search_url(f"{city} events {from_date} {to_date} official tickets concerts sports theatre"),
+                category=category or "culture",
+                source_name="Major City Official Fallback",
+            ),
+            make_source_fallback_event(
+                title=f"{city} concerts sports and theatre discovery",
+                subcategory="AI discovery sources",
+                city=city,
+                country=cc,
+                from_date=from_date,
+                venue=" / ".join(venues[:3]),
+                url=google_search_url(f"best events in {city} {from_date} {to_date} tickets"),
+                category=category or "culture",
+                source_name="Major City Official Fallback",
+            ),
+        ])
+
+    # Always dedupe source cards.
+    seen: set = set()
+    unique: List[Dict[str, Any]] = []
+    for ev in out:
+        key = dedupe_key(ev)
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+    return unique[:12]
+
 
 
 @app.get("/")
@@ -1801,6 +2002,9 @@ def root() -> Dict[str, Any]:
         "v37_premium_planner": True,
         "v37_japan_local_sources": True,
         "v37_ticket_source_aggregation": True,
+        "v38_soft_ranking_no_overfilter": True,
+        "v38_major_city_source_cards": True,
+        "v38_fallback_only_when_sparse": True,
         "seatgeek_auth_mode": "client_id_only",
         "country_city_fix": True,
         "parking_filter": True,
@@ -1943,10 +2147,15 @@ def get_events(
     all_events.extend(sd)
     all_events.extend(ph)
     all_events.extend(eb)
-    all_events.extend(fb)
 
     merge_diag: Dict[str, Any] = {}
     merged = merge_events(all_events, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+
+    # V38: fallback cards only fill gaps. Real events stay first, source cards are added only when sparse.
+    fallback_added = False
+    if len(merged) < 8 and fb:
+        fallback_added = True
+        merged = merge_events(all_events + fb, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
 
     if is_rome(loc) and cat in {"", "sport", "tennis"}:
         has_tennis = any(
@@ -1974,7 +2183,8 @@ def get_events(
             "search_discovery": len(sd),
             "predicthq": len(ph),
             "eventbrite": len(eb),
-            "fallback": len(fb),
+            "fallback_available": len(fb),
+            "fallback_added": int(fallback_added),
             "merged": len(merged),
         },
         raw_count=len(all_events),
@@ -2052,7 +2262,8 @@ def debug_events(
             "search_discovery": len(sd),
             "predicthq": len(ph),
             "eventbrite": len(eb),
-            "fallback": len(fb),
+            "fallback_available": len(fb),
+            "fallback_added": int(fallback_added),
             "merged": len(merged),
         },
         "sample": merged[:30],
