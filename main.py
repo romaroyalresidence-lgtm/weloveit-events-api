@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v36
+# main.py — WELOVEIT Events API v37
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -28,13 +28,14 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v36-v34-core-v35-hardening"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v37-premium-upgrades"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
 PREDICT_API_URL = os.getenv("PREDICT_API_URL", "").strip()
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "").strip()
 EVENTBRITE_API_KEY = os.getenv("EVENTBRITE_API_KEY", "").strip()
+EVENTBRITE_API_URL = os.getenv("EVENTBRITE_API_URL", "https://www.eventbriteapi.com/v3/events/search/").strip()
 SEATGEEK_CLIENT_ID = os.getenv("SEATGEEK_CLIENT_ID", "").strip()
 SEATGEEK_CLIENT_SECRET = os.getenv("SEATGEEK_CLIENT_SECRET", "").strip()
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "").strip()
@@ -366,6 +367,28 @@ MONTHS = {
     "dec": 12, "december": 12,
 }
 
+# V37 upgrades: immagini fallback, Japan local discovery, Eventbrite reale, Premium planner, ticket aggregation
+FALLBACK_IMAGES = {
+    "concert": "https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?auto=format&fit=crop&w=900&q=80",
+    "sport": "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=900&q=80",
+    "motorsport": "https://images.unsplash.com/photo-1503736334956-4c8f8e92946d?auto=format&fit=crop&w=900&q=80",
+    "culture": "https://images.unsplash.com/photo-1531058020387-3be344556be6?auto=format&fit=crop&w=900&q=80",
+    "food": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=900&q=80",
+    "nightlife": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=900&q=80",
+    "default": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=900&q=80",
+}
+
+JAPAN_LOCAL_DOMAINS = [
+    "eplus.jp",
+    "t.pia.jp",
+    "l-tike.com",
+    "ticket.rakuten.co.jp",
+    "tokyo-dome.co.jp",
+    "jleague.co",
+    "npb.jp",
+    "sumo.or.jp",
+]
+
 
 def today_iso() -> str:
     return date.today().isoformat()
@@ -531,6 +554,79 @@ def official_google_ticket_url(title: str, city: str, country_code: str, start_d
     return "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
 
 
+def fallback_image_for_event(title: str = "", category: str = "", subcategory: str = "", venue: str = "") -> str:
+    """Stable hero image fallback when providers do not send an image."""
+    s = slug(f"{title} {category} {subcategory} {venue}")
+
+    if any(k in s for k in ["formula 1", "f1", "motogp", "grand prix"]):
+        return FALLBACK_IMAGES["motorsport"]
+    if any(k in s for k in ["concert", "tour", "festival", "music", "rock", "pop", "jazz", "dj"]):
+        return FALLBACK_IMAGES["concert"]
+    if any(k in s for k in ["football", "rugby", "tennis", "basketball", "nba", "nfl", "ufc", "boxing", "sport"]):
+        return FALLBACK_IMAGES["sport"]
+    if any(k in s for k in ["food", "restaurant", "ramen", "wine", "taste"]):
+        return FALLBACK_IMAGES["food"]
+    if any(k in s for k in ["club", "night", "party", "dance"]):
+        return FALLBACK_IMAGES["nightlife"]
+    if category in FALLBACK_IMAGES:
+        return FALLBACK_IMAGES[category]
+    return FALLBACK_IMAGES["default"]
+
+
+def enrich_event_visuals(ev: Dict[str, Any]) -> Dict[str, Any]:
+    if not ev.get("image_url"):
+        ev["image_url"] = fallback_image_for_event(
+            ev.get("title", ""),
+            ev.get("category", ""),
+            ev.get("subcategory", ""),
+            ev.get("venue", ""),
+        )
+        ev["image_is_fallback"] = True
+    else:
+        ev["image_is_fallback"] = False
+    return ev
+
+
+def make_ticket_source(label: str, url: Optional[str], source_type: str = "official") -> Optional[Dict[str, str]]:
+    if not url:
+        return None
+    return {
+        "label": clean_text(label) or "Tickets",
+        "url": str(url),
+        "type": source_type,
+    }
+
+
+def enrich_ticket_sources(ev: Dict[str, Any]) -> Dict[str, Any]:
+    sources: List[Dict[str, str]] = []
+
+    primary = make_ticket_source(ev.get("source_name") or "Primary source", ev.get("ticket_url") or ev.get("source_url"), "primary")
+    if primary:
+        sources.append(primary)
+
+    eventbrite = make_ticket_source("Eventbrite", ev.get("eventbrite_search_url"), "fallback")
+    if eventbrite:
+        sources.append(eventbrite)
+
+    official = make_ticket_source("Official ticket search", official_google_ticket_url(
+        ev.get("title", ""), ev.get("city", ""), ev.get("country", ""), ev.get("start_date", ""), ev.get("subcategory", "")
+    ), "official_search")
+    if official:
+        sources.append(official)
+
+    seen = set()
+    unique = []
+    for src in sources:
+        key = src.get("url")
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(src)
+
+    ev["ticket_sources"] = unique[:5]
+    ev["ticket_source_count"] = len(unique[:5])
+    return ev
+
+
 def make_event(
     *,
     title: str,
@@ -589,6 +685,8 @@ def make_event(
     if extra:
         ev.update(extra)
 
+    enrich_event_visuals(ev)
+    enrich_ticket_sources(ev)
     return ev
 
 
@@ -677,6 +775,8 @@ def source_weight(source_name: str) -> int:
         return 45
     if "seatgeek" in s:
         return 38
+    if "eventbrite" in s:
+        return 32
     if "search discovery" in s:
         return 34
     if "serpapi" in s or "sports expansion" in s:
@@ -747,6 +847,8 @@ def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_catego
         score += 12
     elif "seatgeek" in source:
         score += 10
+    elif "eventbrite" in source:
+        score += 9
     elif "search discovery" in source:
         score += 8
     elif "serpapi" in source or "sports expansion" in source:
@@ -759,12 +861,16 @@ def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_catego
     # Qualità scheda evento
     if ev.get("image_url"):
         score += 4
+    if ev.get("image_is_fallback"):
+        score -= 2
     if ev.get("ticket_url") and "google.com/search" not in str(ev.get("ticket_url")):
         score += 5
     if ev.get("venue"):
         score += 3
     if ev.get("start_time"):
         score += 2
+    if (ev.get("ticket_source_count") or 0) >= 3:
+        score += 4
     if city_matches(ev, location):
         score += 8
 
@@ -1110,6 +1216,74 @@ def predict_events(location: Dict[str, str], from_date: str, to_date: str, categ
     return out
 
 
+def eventbrite_events(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    """Real Eventbrite integration when EVENTBRITE_API_KEY is present."""
+    if not EVENTBRITE_API_KEY:
+        return []
+
+    headers = {
+        "User-Agent": "WELOVEIT/1.0",
+        "Authorization": f"Bearer {EVENTBRITE_API_KEY}",
+    }
+
+    q = location["city"]
+    if category == "sport":
+        q += " sport tickets"
+    elif category == "concert":
+        q += " concert music"
+    elif category == "culture":
+        q += " exhibition theatre culture"
+
+    params = {
+        "q": q,
+        "location.address": f"{location['city']} {location.get('country_name') or location.get('country_code')}",
+        "start_date.range_start": f"{from_date}T00:00:00Z",
+        "start_date.range_end": f"{to_date}T23:59:59Z",
+        "expand": "venue,ticket_availability,logo",
+        "sort_by": "date",
+    }
+
+    ok, status, data, _ = http_get_json(EVENTBRITE_API_URL, params, headers=headers)
+    if not ok or status not in {200, 201}:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for item in data.get("events", []) or []:
+        title = clean_text((item.get("name") or {}).get("text") or item.get("name") or "")
+        start_dt = parse_dt_safe((item.get("start") or {}).get("local") or (item.get("start") or {}).get("utc"))
+        if not title or not start_dt:
+            continue
+
+        venue = item.get("venue") or {}
+        venue_name = venue.get("name") or ""
+        venue_city = ((venue.get("address") or {}).get("city") or location["city"])
+        venue_country = ((venue.get("address") or {}).get("country") or location["country_code"])
+        logo = item.get("logo") or {}
+        image_url = (logo.get("original") or {}).get("url") or logo.get("url")
+
+        cat, sub = category_from_title(title, category)
+        out.append(make_event(
+            title=title,
+            category=cat,
+            subcategory=sub,
+            start_date=start_dt.date().isoformat(),
+            start_time=start_dt.time().isoformat(timespec="seconds") if start_dt.time() else None,
+            city=venue_city,
+            country=venue_country,
+            venue=venue_name,
+            source_name="Eventbrite",
+            source_url=item.get("url"),
+            ticket_url=item.get("url"),
+            image_url=image_url,
+            extra={
+                "eventbrite_id": item.get("id"),
+                "capacity": item.get("capacity"),
+            },
+        ))
+
+    return out
+
+
 def serpapi_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
     city = location["city"]
     country_name = location["country_name"] or location["country_code"]
@@ -1295,6 +1469,20 @@ def search_discovery_queries(location: Dict[str, str], from_date: str, to_date: 
             f"Internazionali BNL d'Italia {year} official tickets",
             f"Italian Open Rome {year} Foro Italico official tickets",
         ])
+
+    if location.get("country_code") == "JP":
+        jp_terms = [
+            f"site:eplus.jp {city} {year} tickets",
+            f"site:t.pia.jp {city} {year} チケット",
+            f"site:l-tike.com {city} {year} チケット",
+            f"site:ticket.rakuten.co.jp {city} {year} チケット",
+            f"Tokyo Dome {year} tickets",
+            f"Nippon Budokan {year} tickets",
+            f"J League {city} {year} tickets",
+            f"NPB baseball {city} {year} tickets",
+            f"sumo tournament {city} {year} tickets",
+        ]
+        base_terms = jp_terms + base_terms
 
     queries: List[str] = []
     for c in city_variants:
@@ -1568,6 +1756,29 @@ def local_official_fallback(location: Dict[str, str], from_date: str, to_date: s
             },
         )]
 
+    if location.get("country_code") == "JP":
+        q = urllib.parse.quote_plus(
+            f"{location['city']} Japan events {from_date} {to_date} eplus pia lawson rakuten tokyo dome jleague npb sumo official tickets"
+        )
+        url = "https://www.google.com/search?q=" + q
+        return [make_event(
+            title=f"{location['city']} official Japan ticket sources",
+            category=category or "culture",
+            subcategory="Japan local ticket sources",
+            start_date=from_date,
+            city=location["city"],
+            country="JP",
+            venue="eplus / Pia / Lawson Ticket / Rakuten Ticket",
+            source_name="Japan Official Fallback",
+            source_url=url,
+            ticket_url=url,
+            status="fallback",
+            extra={
+                "official_sources": JAPAN_LOCAL_DOMAINS,
+                "japan_local_sources": True,
+            },
+        )]
+
     return []
 
 
@@ -1585,7 +1796,11 @@ def root() -> Dict[str, Any]:
         "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
         "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
-        "eventbrite_mode": "fallback_only",
+        "eventbrite_mode": "real_api_plus_fallback" if bool(EVENTBRITE_API_KEY) else "fallback_only",
+        "v37_hero_images": True,
+        "v37_premium_planner": True,
+        "v37_japan_local_sources": True,
+        "v37_ticket_source_aggregation": True,
         "seatgeek_auth_mode": "client_id_only",
         "country_city_fix": True,
         "parking_filter": True,
@@ -1718,6 +1933,7 @@ def get_events(
     sp = serpapi_events(loc, from_iso, to_iso, cat)
     sd = search_discovery_events(loc, from_iso, to_iso, cat)
     ph = predict_events(loc, from_iso, to_iso, cat)
+    eb = eventbrite_events(loc, from_iso, to_iso, cat)
     fb = local_official_fallback(loc, from_iso, to_iso, cat)
 
     all_events.extend(tm)
@@ -1726,6 +1942,7 @@ def get_events(
     all_events.extend(sp)
     all_events.extend(sd)
     all_events.extend(ph)
+    all_events.extend(eb)
     all_events.extend(fb)
 
     merge_diag: Dict[str, Any] = {}
@@ -1756,6 +1973,7 @@ def get_events(
             "serpapi_sports_expansion": len(sp),
             "search_discovery": len(sd),
             "predicthq": len(ph),
+            "eventbrite": len(eb),
             "fallback": len(fb),
             "merged": len(merged),
         },
@@ -1810,6 +2028,7 @@ def debug_events(
     sp = serpapi_events(loc, from_iso, to_iso, cat)
     sd = search_discovery_events(loc, from_iso, to_iso, cat)
     ph = predict_events(loc, from_iso, to_iso, cat)
+    eb = eventbrite_events(loc, from_iso, to_iso, cat)
     fb = local_official_fallback(loc, from_iso, to_iso, cat)
 
     merged = merge_events(tm + sg + ro + sp + sd + ph + fb, loc, cat, from_iso, to_iso)
@@ -1832,12 +2051,82 @@ def debug_events(
             "serpapi_sports_expansion": len(sp),
             "search_discovery": len(sd),
             "predicthq": len(ph),
+            "eventbrite": len(eb),
             "fallback": len(fb),
             "merged": len(merged),
         },
         "sample": merged[:30],
     }
 
+
+
+@app.get("/ai/travel-plan")
+def ai_travel_plan(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=3)).isoformat()),
+    interests: str = Query("events,food,nightlife,culture"),
+) -> Dict[str, Any]:
+    """WELOVEIT Premium Mode: light AI-style travel plan generated from live event engine + local intent."""
+    loc = normalize_location(city, country)
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or (fd + timedelta(days=2))
+    if td < fd:
+        td = fd
+
+    response = get_events(
+        city=loc["city"],
+        country=loc["country_code"],
+        from_date=fd.isoformat(),
+        to_date=td.isoformat(),
+        category="",
+        diagnostics=False,
+        use_cache=True,
+        write_snapshot=False,
+    )
+    events = json.loads(response.body.decode("utf-8")) if hasattr(response, "body") else []
+    events_by_day: Dict[str, List[Dict[str, Any]]] = {}
+    for ev in events:
+        events_by_day.setdefault(ev.get("start_date", ""), []).append(ev)
+
+    days = []
+    current = fd
+    while current <= td:
+        day_iso = current.isoformat()
+        day_events = sorted(events_by_day.get(day_iso, []), key=lambda e: -(e.get("quality_score") or 0))[:5]
+        top_event = day_events[0] if day_events else None
+
+        city_name = loc["city"]
+        if loc.get("country_code") == "JP":
+            morning = f"Start with a calm local area walk in {city_name}, then check department-store food halls or a classic kissaten."
+            afternoon = "Use Japan local sources: eplus, Ticket Pia, Lawson Ticket, Rakuten Ticket, J.League, NPB and sumo official pages."
+            dinner = "Book ramen/izakaya near the event area; keep 45-60 minutes for train transfers."
+        else:
+            morning = f"Start in the historic/central area of {city_name}, then keep the afternoon flexible for tickets and transfers."
+            afternoon = "Check official ticket links first, then compare marketplace and Eventbrite fallback links."
+            dinner = "Choose dinner close to the venue to avoid traffic and late arrival risk."
+
+        days.append({
+            "date": day_iso,
+            "morning": morning,
+            "afternoon": afternoon,
+            "evening": top_event or "No strong live event found yet; use the official fallback sources.",
+            "top_events": day_events,
+        })
+        current += timedelta(days=1)
+
+    return {
+        "ok": True,
+        "mode": "WELOVEIT Premium AI Travel Planner",
+        "city": loc["city"],
+        "country": loc["country_code"],
+        "from_date": fd.isoformat(),
+        "to_date": td.isoformat(),
+        "interests": [x.strip() for x in interests.split(",") if x.strip()],
+        "total_events_considered": len(events),
+        "days": days,
+    }
 
 
 @app.get("/debug/snapshot")
