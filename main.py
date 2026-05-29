@@ -28,7 +28,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v38-soft-ranking-major-city"
+VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v39-brutal-expanded-major-city"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -1979,7 +1979,7 @@ def local_official_fallback(location: Dict[str, str], from_date: str, to_date: s
         if key not in seen:
             seen.add(key)
             unique.append(ev)
-    return unique[:12]
+    return unique[:40]
 
 
 
@@ -2003,8 +2003,9 @@ def root() -> Dict[str, Any]:
         "v37_japan_local_sources": True,
         "v37_ticket_source_aggregation": True,
         "v38_soft_ranking_no_overfilter": True,
-        "v38_major_city_source_cards": True,
-        "v38_fallback_only_when_sparse": True,
+        "v39_brutal_expansion": True,
+        "v39_all_categories_when_tutte": True,
+        "v39_major_city_minimum_results": True,
         "seatgeek_auth_mode": "client_id_only",
         "country_city_fix": True,
         "parking_filter": True,
@@ -2100,6 +2101,220 @@ def debug_search_discovery(
     }
 
 
+# =========================
+# V39 BRUTAL EXPANSION LAYER
+# =========================
+# Goal: for global cities, never return a useless 1-card result page.
+# We keep real provider events first. If APIs are sparse, we add many
+# transparent source/discovery cards. These are NOT fake dated events:
+# they are official search/ticket entry points for the selected city/date range.
+
+def provider_categories_for_request(category: str) -> List[str]:
+    cat = normalize_category(category)
+    if cat:
+        return [cat]
+    # "Tutte": query the main verticals separately instead of one generic call.
+    return ["", "concert", "sport", "culture"]
+
+
+def collect_real_provider_events_v39(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    all_events: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    seen_raw: set = set()
+
+    cats = provider_categories_for_request(cat)
+
+    def add_many(name: str, events: List[Dict[str, Any]]) -> None:
+        counts[name] = counts.get(name, 0) + len(events)
+        for ev in events:
+            key = f"{slug(ev.get('title'))}|{ev.get('start_date')}|{slug(ev.get('venue'))}|{slug(ev.get('source_name'))}"
+            if key in seen_raw:
+                continue
+            seen_raw.add(key)
+            all_events.append(ev)
+
+    # Ticketmaster and SeatGeek are relatively structured: expand them by category.
+    for c in cats:
+        try:
+            add_many(f"ticketmaster_{c or 'all'}", ticketmaster_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 ticketmaster category=%s failed: %s", c, exc)
+        try:
+            add_many(f"seatgeek_{c or 'all'}", seatgeek_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 seatgeek category=%s failed: %s", c, exc)
+
+    # Expensive discovery sources: call once for requested cat, and for sport/concert if category is all.
+    discovery_cats = [cat] if cat else ["concert", "sport", "culture"]
+    for c in discovery_cats:
+        try:
+            add_many(f"serpapi_{c or 'all'}", serpapi_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 serpapi category=%s failed: %s", c, exc)
+        try:
+            add_many(f"search_discovery_{c or 'all'}", search_discovery_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 search discovery category=%s failed: %s", c, exc)
+
+    # Other providers.
+    for c in ([cat] if cat else [""]):
+        try:
+            add_many("predicthq", predict_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 predicthq failed: %s", exc)
+        try:
+            add_many("eventbrite", eventbrite_events(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 eventbrite failed: %s", exc)
+        try:
+            add_many("rome_tennis_override", roma_tennis_override(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V39 rome tennis override failed: %s", exc)
+
+    counts["raw_total_unique"] = len(all_events)
+    return all_events, counts
+
+
+def expanded_city_source_cards_v39(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+    target_min: int = 30,
+) -> List[Dict[str, Any]]:
+    city = loc.get("city") or ""
+    country = loc.get("country_code") or ""
+    country_name = loc.get("country_name") or country
+    city_key = slug(city)
+
+    verticals = []
+    if cat == "concert":
+        verticals = ["concerts", "live music", "festivals", "jazz", "clubs"]
+    elif cat == "sport":
+        verticals = ["sport fixtures", "football", "tennis", "basketball", "rugby", "motorsport"]
+    elif cat == "culture":
+        verticals = ["exhibitions", "theatre", "museums", "opera", "food festivals", "family events"]
+    else:
+        verticals = [
+            "concerts", "live music", "festivals", "sport fixtures", "football", "tennis",
+            "basketball", "rugby", "theatre", "exhibitions", "museums", "opera",
+            "food festivals", "nightlife", "family events", "comedy", "dance", "classical music",
+        ]
+
+    venue_map = {
+        "paris": [
+            "Accor Arena", "Paris La Défense Arena", "Olympia", "Zénith Paris",
+            "Stade de France", "Parc des Princes", "Roland-Garros", "Philharmonie de Paris",
+            "Théâtre Mogador", "Grand Palais", "Louvre", "Bercy",
+        ],
+        "tokyo": [
+            "Tokyo Dome", "Nippon Budokan", "Saitama Super Arena", "Ariake Arena",
+            "Tokyo Big Sight", "Makuhari Messe", "Zepp Shinjuku", "Billboard Live Tokyo",
+            "National Stadium", "Ryogoku Kokugikan", "Shibuya venues", "Ginza theatres",
+        ],
+        "london": [
+            "O2 Arena", "Wembley Stadium", "Royal Albert Hall", "London Palladium",
+            "Tottenham Hotspur Stadium", "Twickenham", "West End theatres", "Alexandra Palace",
+        ],
+        "new york": [
+            "Madison Square Garden", "Barclays Center", "Broadway", "MetLife Stadium",
+            "Radio City Music Hall", "Yankee Stadium", "Beacon Theatre", "Lincoln Center",
+        ],
+        "roma": [
+            "Stadio Olimpico", "Foro Italico", "Auditorium Parco della Musica", "Circo Massimo",
+            "Teatro dell'Opera", "Palazzo dello Sport", "Ippodromo Capannelle", "MAXXI",
+        ],
+        "rome": [
+            "Stadio Olimpico", "Foro Italico", "Auditorium Parco della Musica", "Circo Massimo",
+            "Teatro dell'Opera", "Palazzo dello Sport", "Ippodromo Capannelle", "MAXXI",
+        ],
+    }
+    venues = venue_map.get(city_key, [
+        "major arenas", "stadiums", "theatres", "museums", "festival venues", "official ticketing sites"
+    ])
+
+    local_sources = {
+        "paris": "Ticketmaster France / Fnac Spectacles / See Tickets / France Billet / venue official sites",
+        "tokyo": "eplus / Ticket Pia / Lawson Ticket / Rakuten Ticket / venue official sites",
+        "london": "Ticketmaster UK / AXS / See Tickets / venue official sites",
+        "new york": "Ticketmaster / SeatGeek / AXS / venue official sites",
+        "roma": "TicketOne / Ticketmaster Italia / Vivaticket / official club and venue sites",
+        "rome": "TicketOne / Ticketmaster Italia / Vivaticket / official club and venue sites",
+    }.get(city_key, "Ticketmaster / SeatGeek / Eventbrite / venue official sites")
+
+    cards: List[Dict[str, Any]] = []
+
+    # First: local official source hub cards.
+    cards.extend(local_official_fallback(loc, from_iso, to_iso, cat))
+
+    # Then: many vertical + venue search cards.
+    for idx, vertical in enumerate(verticals):
+        venue = venues[idx % len(venues)]
+        title = f"{city} {vertical} - official tickets and events"
+        q = f"{city} {country_name} {vertical} {venue} events tickets from {from_iso} to {to_iso} official"
+        category_guess, sub_guess = category_from_title(vertical, cat or "culture")
+        if "concert" in vertical or "music" in vertical or "festival" in vertical or "jazz" in vertical:
+            category_guess, sub_guess = "concert", "Concerts / Music"
+        elif any(x in vertical for x in ["sport", "football", "tennis", "basketball", "rugby", "motorsport"]):
+            category_guess, sub_guess = "sport", "Sports"
+        elif any(x in vertical for x in ["theatre", "opera", "museum", "exhibition"]):
+            category_guess, sub_guess = "culture", "Culture"
+
+        cards.append(make_source_fallback_event(
+            title=title,
+            subcategory=sub_guess,
+            city=city,
+            country=country,
+            from_date=from_iso,
+            venue=f"{venue} / {local_sources}",
+            url=google_search_url(q),
+            category=category_guess,
+            source_name="V39 Expanded Discovery",
+        ))
+
+    # Add venue-specific cards for major venues.
+    for venue in venues:
+        q = f"{venue} {city} events tickets {from_iso} {to_iso} official"
+        cards.append(make_source_fallback_event(
+            title=f"{venue} upcoming events in {city}",
+            subcategory="Venue events",
+            city=city,
+            country=country,
+            from_date=from_iso,
+            venue=venue,
+            url=google_search_url(q),
+            category=cat or "culture",
+            source_name="V39 Venue Discovery",
+        ))
+
+    # Dedupe and cap.
+    seen: set = set()
+    unique: List[Dict[str, Any]] = []
+    for ev in cards:
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        # Lower score so real events stay above source cards.
+        ev["ai_score"] = min(ev.get("ai_score") or 70, 74)
+        ev["quality_score"] = ev["ai_score"]
+        ev["v39_source_card"] = True
+        unique.append(ev)
+    return unique[:target_min]
+
+
+def is_major_city_v39(loc: Dict[str, str]) -> bool:
+    return slug(loc.get("city")) in {
+        "paris", "tokyo", "london", "new york", "roma", "rome", "madrid",
+        "barcelona", "berlin", "milano", "milan", "toronto", "vancouver",
+    }
+
+
 @app.get("/events")
 def get_events(
     city: str = Query(...),
@@ -2107,8 +2322,8 @@ def get_events(
     from_date: str = Query(default_factory=today_iso),
     to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
     category: str = Query(""),
-    diagnostics: bool = Query(False, description="Return events plus V36 diagnostics"),
-    use_cache: bool = Query(True, description="Use in-memory V36 cache"),
+    diagnostics: bool = Query(False, description="Return events plus V39 diagnostics"),
+    use_cache: bool = Query(True, description="Use in-memory V39 cache"),
     write_snapshot: bool = Query(False, description="Write a JSON snapshot for regression tests"),
 ) -> JSONResponse:
     loc = normalize_location(city, country)
@@ -2120,7 +2335,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v39|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -2130,33 +2345,22 @@ def get_events(
                 return JSONResponse({"events": cached_events, "diagnostics": cached_diagnostics})
             return JSONResponse(cached_events)
 
-    all_events: List[Dict[str, Any]] = []
-    tm = ticketmaster_events(loc, from_iso, to_iso, cat)
-    sg = seatgeek_events(loc, from_iso, to_iso, cat)
-    ro = roma_tennis_override(loc, from_iso, to_iso, cat)
-    sp = serpapi_events(loc, from_iso, to_iso, cat)
-    sd = search_discovery_events(loc, from_iso, to_iso, cat)
-    ph = predict_events(loc, from_iso, to_iso, cat)
-    eb = eventbrite_events(loc, from_iso, to_iso, cat)
-    fb = local_official_fallback(loc, from_iso, to_iso, cat)
-
-    all_events.extend(tm)
-    all_events.extend(sg)
-    all_events.extend(ro)
-    all_events.extend(sp)
-    all_events.extend(sd)
-    all_events.extend(ph)
-    all_events.extend(eb)
+    # V39: collect real events through expanded category fan-out.
+    all_events, provider_counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
 
     merge_diag: Dict[str, Any] = {}
     merged = merge_events(all_events, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
 
-    # V38: fallback cards only fill gaps. Real events stay first, source cards are added only when sparse.
-    fallback_added = False
-    if len(merged) < 8 and fb:
-        fallback_added = True
-        merged = merge_events(all_events + fb, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+    source_cards_added = 0
+    target_min = 24 if is_major_city_v39(loc) else 10
 
+    # V39 rule: real events first. If sparse, add transparent official discovery cards, not fake events.
+    if len(merged) < target_min:
+        source_cards = expanded_city_source_cards_v39(loc, from_iso, to_iso, cat, target_min=target_min + 10)
+        source_cards_added = len(source_cards)
+        merged = merge_events(all_events + source_cards, loc, cat, from_iso, to_iso, diagnostics=merge_diag)
+
+    # Rome tennis safety override stays.
     if is_rome(loc) and cat in {"", "sport", "tennis"}:
         has_tennis = any(
             "tennis" in slug(e.get("subcategory"))
@@ -2176,15 +2380,8 @@ def get_events(
         from_iso=from_iso,
         to_iso=to_iso,
         provider_counts={
-            "ticketmaster": len(tm),
-            "seatgeek": len(sg),
-            "rome_tennis_override": len(ro),
-            "serpapi_sports_expansion": len(sp),
-            "search_discovery": len(sd),
-            "predicthq": len(ph),
-            "eventbrite": len(eb),
-            "fallback_available": len(fb),
-            "fallback_added": int(fallback_added),
+            **provider_counts,
+            "v39_source_cards_added": source_cards_added,
             "merged": len(merged),
         },
         raw_count=len(all_events),
@@ -2193,6 +2390,8 @@ def get_events(
         cache="miss",
     )
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
+    diag["v39_mode"] = "brutal_expansion_soft_filtering"
+    diag["target_min_results"] = target_min
 
     if write_snapshot:
         diag["snapshot_path"] = save_events_snapshot(
@@ -2212,7 +2411,6 @@ def get_events(
         return JSONResponse({"events": merged, "diagnostics": diag})
 
     return JSONResponse(merged)
-
 
 @app.get("/debug/events")
 def debug_events(
