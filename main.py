@@ -1,4 +1,4 @@
-# main.py — WELOVEIT Events API v41
+# main.py — WELOVEIT Events API v42
 # V36 = V34 funzionante + V35 hardening layer:
 # - no httpx: uses stdlib urllib + FastAPI
 # - hard final date filter after merge
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "ticketmaster-seatgeek-predicthq-football-eventbrite-serpapi-v40-premium-merge-japan"
+VERSION = "weloveit-events-v42-real-local-sources-engine"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -58,7 +59,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v41")
+logger = logging.getLogger("weloveit.events.v42")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -2206,6 +2207,285 @@ def debug_search_discovery(
     }
 
 
+
+
+# =========================
+# V42 LOCAL SOURCES ENGINE — REAL EVENTS ONLY
+# =========================
+# This layer does NOT invent event cards. It only accepts local-source records
+# when a real title + explicit date + source URL can be extracted.
+
+LOCAL_SOURCE_TIMEOUT = int(os.getenv("WELOVEIT_LOCAL_SOURCE_TIMEOUT", "10"))
+ENABLE_LOCAL_SOURCES = os.getenv("WELOVEIT_ENABLE_LOCAL_SOURCES", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def http_get_text(url: str, headers: Optional[Dict[str, str]] = None) -> Tuple[bool, int, str, str]:
+    req_headers = headers or {
+        "User-Agent": "Mozilla/5.0 (compatible; WELOVEIT-EventsBot/1.0; +https://www.weloveit.it)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+    }
+    req = urllib.request.Request(url, headers=req_headers)
+    try:
+        with urllib.request.urlopen(req, timeout=LOCAL_SOURCE_TIMEOUT) as resp:
+            raw = resp.read()
+            charset = resp.headers.get_content_charset() or "utf-8"
+            return True, int(resp.status), raw.decode(charset, errors="replace"), url
+    except Exception as exc:
+        logger.info("V42 local source fetch failed url=%s err=%s", url, exc)
+        return False, 0, "", url
+
+
+def absolute_url(base_url: str, maybe_url: Any) -> Optional[str]:
+    u = clean_text(maybe_url)
+    if not u:
+        return None
+    return urllib.parse.urljoin(base_url, html.unescape(u))
+
+
+def strip_html_tags(value: str) -> str:
+    value = re.sub(r"<script[\s\S]*?</script>", " ", value or " ", flags=re.I)
+    value = re.sub(r"<style[\s\S]*?</style>", " ", value, flags=re.I)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return clean_text(html.unescape(value))
+
+
+def json_loads_lenient(raw: str) -> Optional[Any]:
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    try:
+        cleaned = html.unescape(raw).strip()
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        return json.loads(cleaned)
+    except Exception:
+        return None
+
+
+def iter_jsonld_nodes(obj: Any) -> List[Dict[str, Any]]:
+    nodes: List[Dict[str, Any]] = []
+    if isinstance(obj, dict):
+        if "@graph" in obj and isinstance(obj["@graph"], list):
+            for x in obj["@graph"]:
+                nodes.extend(iter_jsonld_nodes(x))
+        nodes.append(obj)
+    elif isinstance(obj, list):
+        for x in obj:
+            nodes.extend(iter_jsonld_nodes(x))
+    return nodes
+
+
+def node_is_event(node: Dict[str, Any]) -> bool:
+    t = node.get("@type") or node.get("type") or ""
+    if isinstance(t, list):
+        return any(str(x).lower() == "event" for x in t)
+    return str(t).lower() == "event"
+
+
+def parse_jsonld_events_from_html(
+    html_text: str,
+    base_url: str,
+    location: Dict[str, str],
+    source_name: str,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    scripts = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
+        html_text or "",
+        flags=re.I,
+    )
+    for raw in scripts:
+        data = json_loads_lenient(raw)
+        if data is None:
+            continue
+        for node in iter_jsonld_nodes(data):
+            if not node_is_event(node):
+                continue
+            title = clean_text(node.get("name") or node.get("headline"))
+            start_raw = node.get("startDate") or node.get("start_date")
+            dt = parse_dt_safe(start_raw) or parse_dt_safe(str(start_raw or "")[:10])
+            if not title or not dt:
+                continue
+            location_node = node.get("location") or {}
+            venue = ""
+            city = location.get("city") or ""
+            country = location.get("country_code") or ""
+            if isinstance(location_node, dict):
+                venue = clean_text(location_node.get("name"))
+                address = location_node.get("address") or {}
+                if isinstance(address, dict):
+                    city = clean_text(address.get("addressLocality") or city)
+                    country = clean_text(address.get("addressCountry") or country)
+            url = absolute_url(base_url, node.get("url") or node.get("mainEntityOfPage") or base_url)
+            image = node.get("image")
+            if isinstance(image, list):
+                image = image[0] if image else None
+            if isinstance(image, dict):
+                image = image.get("url")
+            cat, sub = category_from_title(title, "")
+            out.append(make_event(
+                title=title,
+                category=cat,
+                subcategory=sub,
+                start_date=dt.date().isoformat(),
+                start_time=dt.time().isoformat(timespec="seconds") if dt.time() else None,
+                city=city or location.get("city") or "",
+                country=country or location.get("country_code") or "",
+                venue=venue,
+                source_name=source_name,
+                source_url=url,
+                ticket_url=url,
+                image_url=absolute_url(base_url, image) if image else None,
+                extra={"v42_local_source": True, "date_confidence": 0.99},
+            ))
+    return out
+
+
+def parse_date_from_italian_text(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
+    # Reuse strict discovery parser: it accepts explicit Italian and English dates only.
+    return parse_discovery_date_from_text(text, from_date, to_date)
+
+
+def parse_anchor_local_events(
+    html_text: str,
+    base_url: str,
+    location: Dict[str, str],
+    source_name: str,
+    from_date: str,
+    to_date: str,
+) -> List[Dict[str, Any]]:
+    """Fallback parser for editorial listing pages. Accepts only anchors/blocks with an explicit date."""
+    out: List[Dict[str, Any]] = []
+    # Article blocks first.
+    blocks = re.findall(r"<(article|li|div)\b[^>]*(?:event|evento|card|item|article)[^>]*>[\s\S]{0,5000}?</\1>", html_text or "", flags=re.I)
+    # Python returns only tag if using capturing group; use broader manual block regex.
+    blocks2 = re.findall(r"<article\b[\s\S]{0,5000}?</article>|<li\b[\s\S]{0,3500}?</li>", html_text or "", flags=re.I)
+    candidates = blocks2[:120]
+    if not candidates:
+        candidates = re.findall(r"<a\b[^>]+href=[\"'][^\"']+[\"'][^>]*>[\s\S]{0,700}?</a>", html_text or "", flags=re.I)[:180]
+
+    for block in candidates:
+        href_match = re.search(r"href=[\"']([^\"']+)[\"']", block, flags=re.I)
+        url = absolute_url(base_url, href_match.group(1)) if href_match else base_url
+        text = strip_html_tags(block)
+        if len(text) < 12:
+            continue
+        d, t, confidence = parse_date_from_italian_text(text, from_date, to_date)
+        if not d or not confidence:
+            continue
+        # Title extraction: prefer h2/h3/a title/short leading text before date.
+        title = ""
+        h = re.search(r"<h[1-4][^>]*>([\s\S]{3,220}?)</h[1-4]>", block, flags=re.I)
+        if h:
+            title = strip_html_tags(h.group(1))
+        if not title:
+            tm = re.search(r"title=[\"']([^\"']{3,180})[\"']", block, flags=re.I)
+            if tm:
+                title = clean_text(html.unescape(tm.group(1)))
+        if not title:
+            title = re.split(r"\b(?:dal|dall|fino|sabato|domenica|lunedì|martedì|mercoledì|giovedì|venerdì|\d{1,2}[/-]\d{1,2})\b", text, maxsplit=1, flags=re.I)[0]
+            title = clean_text(title[:140])
+        if not title or len(title) < 4:
+            continue
+        cat, sub = category_from_title(title, "")
+        out.append(make_event(
+            title=title,
+            category=cat,
+            subcategory=sub,
+            start_date=d,
+            start_time=t,
+            city=location.get("city") or "",
+            country=location.get("country_code") or "",
+            venue="",
+            source_name=source_name,
+            source_url=url,
+            ticket_url=url,
+            image_url=None,
+            extra={"v42_local_source": True, "date_confidence": 0.90},
+        ))
+    return out
+
+
+def roma_local_source_urls() -> List[Tuple[str, str]]:
+    return [
+        ("RomaToday", "https://www.romatoday.it/eventi/"),
+        ("Turismo Roma", "https://www.turismoroma.it/it/eventi"),
+        ("Wanted in Rome", "https://www.wantedinrome.com/whatson"),
+        ("Auditorium Parco della Musica", "https://www.auditorium.com/it/eventi/"),
+        ("Teatro dell'Opera di Roma", "https://www.operaroma.it/spettacoli/"),
+        ("MAXXI", "https://www.maxxi.art/events/"),
+    ]
+
+
+def paris_local_source_urls() -> List[Tuple[str, str]]:
+    return [
+        ("Paris Je t'aime", "https://parisjetaime.com/eng/events"),
+        ("Sortir à Paris", "https://www.sortiraparis.com/en/what-to-do-in-paris"),
+        ("Accor Arena", "https://www.accorarena.com/en/events-and-tickets"),
+        ("Philharmonie de Paris", "https://philharmoniedeparis.fr/en/programming"),
+    ]
+
+
+def tokyo_local_source_urls() -> List[Tuple[str, str]]:
+    return [
+        ("Tokyo Cheapo Events", "https://tokyocheapo.com/events/"),
+        ("Tokyo Weekender Events", "https://www.tokyoweekender.com/events/"),
+        ("Tokyo Dome", "https://www.tokyo-dome.co.jp/en/tourists/dome/events/"),
+        ("Tokyo Big Sight", "https://www.bigsight.jp/english/visitor/event/"),
+    ]
+
+
+def local_source_urls_for_city(location: Dict[str, str]) -> List[Tuple[str, str]]:
+    city_key = slug(location.get("city"))
+    country = (location.get("country_code") or "").upper()
+    if city_key in {"roma", "rome"} or country == "IT" and city_key == "roma":
+        return roma_local_source_urls()
+    if city_key == "paris":
+        return paris_local_source_urls()
+    if city_key == "tokyo":
+        return tokyo_local_source_urls()
+    return []
+
+
+def local_source_events_v42(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    if not ENABLE_LOCAL_SOURCES:
+        return []
+    urls = local_source_urls_for_city(location)
+    if not urls:
+        return []
+    out: List[Dict[str, Any]] = []
+    for source_name, url in urls:
+        ok, status, body, final_url = http_get_text(url)
+        if not ok or status >= 400 or not body:
+            continue
+        parsed = parse_jsonld_events_from_html(body, final_url, location, source_name)
+        parsed.extend(parse_anchor_local_events(body, final_url, location, source_name, from_date, to_date))
+        for ev in parsed:
+            if not is_within_dates(ev, from_date, to_date):
+                continue
+            if category:
+                ev_cat = ev.get("category")
+                if category == "sport" and ev_cat not in {"sport", "motorsport"}:
+                    continue
+                if category != "sport" and ev_cat != category:
+                    # Keep culture/local events when category is broad only.
+                    continue
+            ev["source_priority"] = "local_editorial"
+            out.append(ev)
+        time.sleep(0.05)
+    # Deduplicate local results before returning.
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for ev in out:
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ev)
+    return unique[:80]
+
+
 # =========================
 # V39 BRUTAL EXPANSION LAYER
 # =========================
@@ -2280,6 +2560,10 @@ def collect_real_provider_events_v39(
             add_many("rome_tennis_override", roma_tennis_override(loc, from_iso, to_iso, c))
         except Exception as exc:
             logger.warning("V39 rome tennis override failed: %s", exc)
+        try:
+            add_many("local_sources_v42", local_source_events_v42(loc, from_iso, to_iso, c))
+        except Exception as exc:
+            logger.warning("V42 local sources failed: %s", exc)
 
     counts["raw_total_unique"] = len(all_events)
     return all_events, counts
@@ -2489,6 +2773,34 @@ def discovery_sources_endpoint(
         "sources": discovery_sources_for_city_v41(loc, cat),
     }
 
+
+
+@app.get("/debug/local-sources")
+def debug_local_sources(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query(""),
+) -> Dict[str, Any]:
+    loc = normalize_location(city, country)
+    cat = normalize_category(category)
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or (fd + timedelta(days=30))
+    if td < fd:
+        td = fd
+    events = local_source_events_v42(loc, fd.isoformat(), td.isoformat(), cat)
+    return {
+        "ok": True,
+        "version": VERSION,
+        "enabled": ENABLE_LOCAL_SOURCES,
+        "normalized": loc,
+        "sources": [{"name": n, "url": u} for n, u in local_source_urls_for_city(loc)],
+        "count": len(events),
+        "sample": events[:30],
+    }
+
+
 @app.get("/events")
 def get_events(
     city: str = Query(...),
@@ -2509,7 +2821,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v41-real-only|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v42-real-local-sources|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -2561,6 +2873,8 @@ def get_events(
     )
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
     diag["v41_mode"] = "real_events_only_no_fake_fallbacks"
+    diag["v42_local_sources_engine"] = True
+    diag["v42_local_sources_enabled"] = ENABLE_LOCAL_SOURCES
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
         "Non abbiamo ancora trovato abbastanza eventi live verificati per questa ricerca. "
