@@ -60,6 +60,177 @@ logging.basicConfig(
 logger = logging.getLogger("weloveit.events.v36")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
+
+def make_events_cache_key(city: str, country: str, from_iso: str, to_iso: str, cat: str) -> str:
+    return "|".join([
+        str(city or "").strip().lower(),
+        str(country or "").strip().lower(),
+        str(from_iso or "").strip(),
+        str(to_iso or "").strip(),
+        str(cat or "").strip().lower(),
+    ])
+
+
+def get_events_cache(cache_key: str) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
+    if not ENABLE_EVENTS_CACHE:
+        return None
+
+    item = _EVENTS_CACHE.get(cache_key)
+    if not item:
+        return None
+
+    created_at, events, diagnostics = item
+
+    if time.time() - created_at > DISCOVERY_CACHE_TTL_SECONDS:
+        _EVENTS_CACHE.pop(cache_key, None)
+        return None
+
+    diag = dict(diagnostics or {})
+    diag["cache"] = "hit"
+
+    return events, diag
+
+
+def set_events_cache(cache_key: str, events: List[Dict[str, Any]], diagnostics: Dict[str, Any]) -> None:
+    if not ENABLE_EVENTS_CACHE:
+        return
+
+    _EVENTS_CACHE[cache_key] = (
+        time.time(),
+        list(events or []),
+        dict(diagnostics or {}),
+    )
+
+
+def validate_event_v36(
+    ev: Dict[str, Any],
+    location: Dict[str, str],
+    requested_category: str,
+    from_date: str,
+    to_date: str,
+) -> Tuple[bool, str]:
+    title = clean_text(ev.get("title"))
+    if not title:
+        return False, "missing_title"
+
+    if not ev.get("start_date"):
+        return False, "missing_start_date"
+
+    if not is_within_dates(ev, from_date, to_date):
+        return False, "outside_requested_dates"
+
+    if not city_matches(ev, location):
+        return False, "city_country_mismatch"
+
+    if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
+        return False, "bad_or_low_quality_title"
+
+    combined = " ".join([
+        title,
+        clean_text(ev.get("venue")),
+        clean_text(ev.get("source_url")),
+        clean_text(ev.get("ticket_url")),
+    ])
+
+    if result_year_conflicts(combined, from_date, to_date):
+        return False, "wrong_year_conflict"
+
+    confidence = ev.get("date_confidence")
+    try:
+        if confidence is not None and float(confidence) < MIN_DATE_CONFIDENCE:
+            return False, "low_date_confidence"
+    except Exception:
+        pass
+
+    if requested_category:
+        ev_cat = ev.get("category")
+        if requested_category == "sport":
+            if ev_cat not in {"sport", "motorsport"}:
+                return False, "category_mismatch"
+        elif ev_cat and ev_cat != requested_category:
+            return False, "category_mismatch"
+
+    return True, "accepted"
+
+
+def log_event_v36(ev: Dict[str, Any], accepted: bool, reason: str) -> None:
+    if not ENABLE_DIAGNOSTICS_LOG:
+        return
+
+    try:
+        logger.info(
+            "event_v36 accepted=%s reason=%s source=%s date=%s title=%s",
+            accepted,
+            reason,
+            ev.get("source_name"),
+            ev.get("start_date"),
+            ev.get("title"),
+        )
+    except Exception:
+        pass
+
+
+def build_events_diagnostics(
+    *,
+    loc: Dict[str, str],
+    category: str,
+    from_iso: str,
+    to_iso: str,
+    provider_counts: Dict[str, int],
+    raw_count: int,
+    merged_count: int,
+    discard_reasons: Dict[str, int],
+    cache: str,
+) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "version": VERSION,
+        "normalized": loc,
+        "category": category,
+        "from_date": from_iso,
+        "to_date": to_iso,
+        "provider_counts": provider_counts,
+        "raw_count": raw_count,
+        "merged_count": merged_count,
+        "discard_reasons": discard_reasons,
+        "cache": cache,
+        "cache_enabled": ENABLE_EVENTS_CACHE,
+        "cache_ttl_seconds": DISCOVERY_CACHE_TTL_SECONDS,
+        "min_date_confidence": MIN_DATE_CONFIDENCE,
+        "generated_at": datetime.utcnow().isoformat() + "+00:00",
+    }
+
+
+def save_events_snapshot(
+    events: List[Dict[str, Any]],
+    diagnostics: Dict[str, Any],
+    *,
+    city: str,
+    country: str,
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> str:
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+    raw_name = make_events_cache_key(city, country, from_date, to_date, category)
+    digest = hashlib.sha1(raw_name.encode("utf-8")).hexdigest()[:12]
+    filename = f"events_{digest}_{from_date}_{to_date}.json"
+    path = SNAPSHOT_DIR / filename
+
+    payload = {
+        "events": events,
+        "diagnostics": diagnostics,
+    }
+
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return str(path)
+
+
 app = FastAPI(title="WELOVEIT Events API", version=VERSION)
 app.add_middleware(
     CORSMiddleware,
@@ -517,44 +688,128 @@ def source_weight(source_name: str) -> int:
     return 10
 
 
+def fame_boost(title: str, venue: str, subcategory: str) -> int:
+    s = slug(f"{title} {venue} {subcategory}")
+
+    superstar_keywords = [
+        "taylor swift", "beyonce", "beyoncé", "coldplay", "ed sheeran",
+        "dua lipa", "bruce springsteen", "madonna", "lady gaga",
+        "the weeknd", "billie eilish", "olivia rodrigo", "oasis",
+        "metallica", "u2", "rolling stones", "drake", "bad bunny",
+        "kendrick lamar", "eminem", "rihanna", "justin bieber",
+        "harry styles", "ariana grande", "post malone"
+    ]
+
+    major_sport_keywords = [
+        "wimbledon", "champions league", "premier league", "nba",
+        "nfl", "ufc", "formula 1", "f1", "motogp", "atp", "wta",
+        "grand prix", "final", "semi final", "semifinal",
+        "italian open", "internazionali bnl", "six nations",
+        "rugby world cup", "world cup", "olympics", "us open",
+        "roland garros", "super bowl"
+    ]
+
+    iconic_venues = [
+        "wembley", "o2 arena", "royal albert hall", "madison square garden",
+        "stadio olimpico", "foro italico", "san siro", "allianz arena",
+        "tokyo dome", "nippon budokan", "saitama super arena",
+        "barclays center", "crypto.com arena", "underworld",
+        "royal opera house", "apollo", "hyde park"
+    ]
+
+    boost = 0
+
+    if any(k in s for k in superstar_keywords):
+        boost += 14
+
+    if any(k in s for k in major_sport_keywords):
+        boost += 12
+
+    if any(k in s for k in iconic_venues):
+        boost += 7
+
+    if any(k in s for k in ["final", "championship", "grand prix", "open", "world tour", "stadium tour"]):
+        boost += 6
+
+    return boost
+
+
 def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_category: str) -> int:
-    score = source_weight(ev.get("source_name", ""))
+    score = 55
 
     title = slug(ev.get("title"))
     venue = slug(ev.get("venue"))
     sub = slug(ev.get("subcategory"))
+    source = slug(ev.get("source_name"))
 
-    if ev.get("image_url"):
-        score += 8
-    if ev.get("ticket_url") and "google.com/search" not in str(ev.get("ticket_url")):
-        score += 8
-    if city_matches(ev, location):
-        score += 15
-
-    if requested_category == "sport" and ev.get("category") in {"sport", "motorsport"}:
-        score += 15
-    if requested_category and requested_category != "sport" and ev.get("category") == requested_category:
+    # Fonte dati: provider più affidabili valgono di più
+    if "ticketmaster" in source:
         score += 12
-
-    if any(k in title for k in ["final", "open", "championship", "cup", "grand prix", "internazionali"]):
+    elif "seatgeek" in source:
         score += 10
+    elif "search discovery" in source:
+        score += 8
+    elif "serpapi" in source or "sports expansion" in source:
+        score += 7
+    elif "predicthq" in source:
+        score += 4
+    elif "fallback" in source:
+        score -= 5
+
+    # Qualità scheda evento
+    if ev.get("image_url"):
+        score += 4
+    if ev.get("ticket_url") and "google.com/search" not in str(ev.get("ticket_url")):
+        score += 5
+    if ev.get("venue"):
+        score += 3
+    if ev.get("start_time"):
+        score += 2
+    if city_matches(ev, location):
+        score += 8
+
+    # Coerenza categoria richiesta
+    if requested_category == "sport" and ev.get("category") in {"sport", "motorsport"}:
+        score += 6
+    elif requested_category and ev.get("category") == requested_category:
+        score += 5
+
+    # Boost fama artista/evento/venue
+    score += fame_boost(
+        ev.get("title", ""),
+        ev.get("venue", ""),
+        ev.get("subcategory", "")
+    )
+
+    # Boost extra per sport/eventi premium
+    if any(k in title for k in ["final", "open", "championship", "cup", "grand prix", "internazionali"]):
+        score += 5
 
     if "tennis" in sub or any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 14
+        score += 6
 
     if is_rome(location) and any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 10
+        score += 5
 
+    # Penalità eventi deboli o poco utili
     if title_is_bad(ev.get("title", ""), ev.get("source_url"), ev.get("category", "")):
-        score -= 40
+        score -= 35
 
-    if "predicthq" in slug(ev.get("source_name")) and not ev.get("source_url"):
+    if "predicthq" in source and not ev.get("source_url"):
         score -= 8
 
     if ev.get("search_date_confidence") is False:
-        score -= 30
+        score -= 25
 
-    return max(1, min(99, score))
+    if len(title) < 8:
+        score -= 8
+
+    # Micro-variazione stabile per evitare punteggi tutti uguali
+    variation_seed = slug(ev.get("title", "")) + str(ev.get("start_date", "")) + str(ev.get("venue", ""))
+    variation = sum(ord(c) for c in variation_seed) % 7
+    score += variation
+
+    return max(60, min(99, score))
 
 
 def dedupe_key(ev: Dict[str, Any]) -> str:
@@ -1314,195 +1569,6 @@ def local_official_fallback(location: Dict[str, str], from_date: str, to_date: s
         )]
 
     return []
-
-
-# =========================
-# V36 CACHE / DIAGNOSTICS FIX
-# =========================
-
-def make_events_cache_key(city: str, country: str, from_iso: str, to_iso: str, cat: str) -> str:
-    """
-    Build stable cache key for /events.
-    """
-    raw = "|".join([
-        str(city or "").strip().lower(),
-        str(country or "").strip().lower(),
-        str(from_iso or "").strip(),
-        str(to_iso or "").strip(),
-        str(cat or "").strip().lower(),
-    ])
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def get_events_cache(cache_key: str) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
-    """
-    Read in-memory events cache.
-    """
-    if not ENABLE_EVENTS_CACHE:
-        return None
-
-    item = _EVENTS_CACHE.get(cache_key)
-    if not item:
-        return None
-
-    created_at, events, diagnostics = item
-    if time.time() - created_at > DISCOVERY_CACHE_TTL_SECONDS:
-        _EVENTS_CACHE.pop(cache_key, None)
-        return None
-
-    cached_diag = dict(diagnostics or {})
-    cached_diag["cache"] = "hit"
-
-    return events, cached_diag
-
-
-def set_events_cache(cache_key: str, events: List[Dict[str, Any]], diagnostics: Dict[str, Any]) -> None:
-    """
-    Store in-memory events cache.
-    """
-    if not ENABLE_EVENTS_CACHE:
-        return
-
-    _EVENTS_CACHE[cache_key] = (time.time(), events, diagnostics)
-
-
-def validate_event_v36(
-    ev: Dict[str, Any],
-    location: Dict[str, str],
-    requested_category: str,
-    from_date: str,
-    to_date: str,
-) -> Tuple[bool, str]:
-    """
-    Final hardening validation before merge.
-    """
-    title = clean_text(ev.get("title"))
-    if not title:
-        return False, "missing_title"
-
-    if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
-        return False, "bad_or_low_quality_title"
-
-    if not ev.get("start_date"):
-        return False, "missing_start_date"
-
-    if not is_within_dates(ev, from_date, to_date):
-        return False, "outside_requested_dates"
-
-    date_confidence = ev.get("date_confidence", 1)
-    try:
-        date_confidence_float = float(date_confidence if date_confidence is not None else 1)
-    except Exception:
-        date_confidence_float = 1
-
-    if date_confidence_float < MIN_DATE_CONFIDENCE:
-        return False, "low_date_confidence"
-
-    combined = " ".join([
-        clean_text(ev.get("title")),
-        clean_text(ev.get("venue")),
-        clean_text(ev.get("city")),
-        clean_text(ev.get("country")),
-        clean_text(ev.get("source_url")),
-    ])
-
-    if result_year_conflicts(combined, from_date, to_date):
-        return False, "wrong_year"
-
-    if location.get("city") and not city_matches(ev, location):
-        source_name = slug(ev.get("source_name"))
-        if "fallback" not in source_name and "search discovery" not in source_name:
-            return False, "wrong_city_or_country"
-
-    if requested_category:
-        ev_category = ev.get("category")
-        if requested_category == "sport":
-            if ev_category not in {"sport", "motorsport"}:
-                return False, "wrong_category"
-        elif ev_category and ev_category != requested_category:
-            return False, "wrong_category"
-
-    return True, "accepted"
-
-
-def log_event_v36(ev: Dict[str, Any], accepted: bool, reason: str) -> None:
-    """
-    Optional debug logging for V36 event filtering.
-    """
-    if not ENABLE_DIAGNOSTICS_LOG:
-        return
-
-    logger.debug(
-        "event_v36 accepted=%s reason=%s source=%s date=%s title=%s",
-        accepted,
-        reason,
-        ev.get("source_name"),
-        ev.get("start_date"),
-        ev.get("title"),
-    )
-
-
-def build_events_diagnostics(
-    *,
-    loc: Dict[str, str],
-    category: str,
-    from_iso: str,
-    to_iso: str,
-    provider_counts: Dict[str, int],
-    raw_count: int,
-    merged_count: int,
-    discard_reasons: Dict[str, int],
-    cache: str,
-) -> Dict[str, Any]:
-    """
-    Build diagnostics payload for /events?diagnostics=true.
-    """
-    return {
-        "ok": True,
-        "version": VERSION,
-        "normalized": loc,
-        "category": category,
-        "from_date": from_iso,
-        "to_date": to_iso,
-        "provider_counts": provider_counts,
-        "raw_count": raw_count,
-        "merged_count": merged_count,
-        "discard_reasons": discard_reasons,
-        "cache": cache,
-        "cache_enabled": ENABLE_EVENTS_CACHE,
-        "cache_ttl_seconds": DISCOVERY_CACHE_TTL_SECONDS,
-        "min_date_confidence": MIN_DATE_CONFIDENCE,
-    }
-
-
-def save_events_snapshot(
-    events: List[Dict[str, Any]],
-    diagnostics: Dict[str, Any],
-    *,
-    city: str,
-    country: str,
-    from_date: str,
-    to_date: str,
-    category: str,
-) -> str:
-    """
-    Save snapshot JSON file for regression/debug.
-    """
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-
-    safe_name = slug(f"{city}-{country}-{from_date}-{to_date}-{category}") or "events"
-    safe_name = re.sub(r"[^a-z0-9\-]+", "-", safe_name.lower()).strip("-")
-    filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{safe_name}.json"
-    path = SNAPSHOT_DIR / filename
-
-    payload = {
-        "created_at": datetime.utcnow().isoformat() + "+00:00",
-        "events": events,
-        "diagnostics": diagnostics,
-    }
-
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return str(path)
 
 
 @app.get("/")
