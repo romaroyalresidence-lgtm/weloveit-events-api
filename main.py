@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v46-global-official-premium-first"
+VERSION = "weloveit-events-v48-hybrid-discovery-engine"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -59,7 +59,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("weloveit.events.v43")
+logger = logging.getLogger("weloveit.events.v48")
 _EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
 
@@ -3366,6 +3366,401 @@ def collect_real_provider_events_v43(
     return events, counts, v43_diag
 
 
+# =========================
+# V48 HYBRID DISCOVERY ENGINE — GLOBAL EVENT INTELLIGENCE
+# =========================
+# Fixes V47 over-filtering:
+# - keeps fake/category/editorial rejection
+# - adds broad + vertical discovery by city/country
+# - reads trusted pages and extracts JSON-LD / anchors / meta event pages
+# - adds Japanese date parser and Japan/Tokyo official portals
+# - does not create synthetic fallback event cards
+
+V48_MAX_GOOGLE_RESULTS_PER_QUERY = int(os.getenv("WELOVEIT_V48_GOOGLE_RESULTS_PER_QUERY", "10"))
+V48_MAX_PAGES_TO_FETCH = int(os.getenv("WELOVEIT_V48_MAX_PAGES_TO_FETCH", "42"))
+V48_MAX_QUERIES = int(os.getenv("WELOVEIT_V48_MAX_QUERIES", "26"))
+V48_MIN_EVENTS_BEFORE_EXPANSION = int(os.getenv("WELOVEIT_V48_MIN_EVENTS_BEFORE_EXPANSION", "12"))
+
+V48_OFFICIAL_GLOBAL_DOMAINS = [
+    "ticketmaster", "ticketone", "vivaticket", "eventbrite", "dice.fm", "feverup", "ra.co",
+    "axs.com", "seetickets", "ticketek", "fnacspectacles", "francebillet",
+    "pia.jp", "eplus.jp", "l-tike.com", "rakuten", "livepocket", "cnplayguide",
+]
+
+V48_JAPAN_DOMAINS = [
+    "eplus.jp", "t.pia.jp", "l-tike.com", "ticket.rakuten.co.jp", "livepocket.jp", "t.livepocket.jp",
+    "cnplayguide.com", "jleague.jp", "npb.jp", "sumo.or.jp", "anime-japan.jp", "tokyo-dome.co.jp",
+    "bigsight.jp", "zaiko.io", "peatix.com", "eventernote.com", "tokyoweekender.com/events",
+]
+
+V48_CATEGORY_TERMS = {
+    "sport": ["sports", "football", "soccer", "tennis", "basketball", "baseball", "rugby", "motorsport", "fixtures", "tickets"],
+    "concert": ["concerts", "live music", "tour", "festival", "jazz", "rock", "club", "tickets"],
+    "culture": ["exhibition", "museum", "theatre", "opera", "show", "festival", "tickets"],
+    "": ["events", "concerts", "festivals", "sports", "theatre", "exhibitions", "tickets", "things to do"],
+}
+
+
+def parse_japanese_date_from_text_v48(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
+    """Parse dates like 2026年7月2日, 7月2日, 2026/7/2 from Japanese/Asian event pages."""
+    raw = clean_text(text)
+    if not raw:
+        return None, None, False
+
+    fd = parse_date_safe(from_date) or date.today()
+
+    patterns = [
+        r"\b(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+        r"\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b",
+        r"\b(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+    ]
+
+    parsed: Optional[date] = None
+    for pat in patterns:
+        m = re.search(pat, raw)
+        if not m:
+            continue
+        try:
+            if len(m.groups()) == 3:
+                y, mo, da = [int(x) for x in m.groups()]
+            else:
+                y = fd.year
+                mo, da = [int(x) for x in m.groups()]
+            parsed = date(y, mo, da)
+            if parsed < fd and len(m.groups()) == 2:
+                parsed = date(fd.year + 1, mo, da)
+            break
+        except Exception:
+            parsed = None
+
+    if not parsed:
+        return None, None, False
+
+    tm = re.search(r"\b([01]?\d|2[0-3])[:：]([0-5]\d)\b", raw)
+    time_s = f"{int(tm.group(1)):02d}:{tm.group(2)}:00" if tm else None
+    return parsed.isoformat(), time_s, True
+
+
+def parse_any_event_date_v48(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
+    d, t, ok = parse_discovery_date_from_text(text, from_date, to_date)
+    if d and ok:
+        return d, t, ok
+    return parse_japanese_date_from_text_v48(text, from_date, to_date)
+
+
+def title_is_index_or_category_v48(title: str, url: str = "") -> bool:
+    s = slug(title)
+    u = slug(url)
+    if not s:
+        return True
+    bad_exact = {
+        "events", "eventi", "all events", "tutti gli eventi", "calendar", "calendario",
+        "things to do", "cosa fare", "domani", "tomorrow", "today", "oggi",
+        "this weekend", "weekend", "prossima settimana", "next week",
+    }
+    if s in bad_exact:
+        return True
+    bad_phrases = [
+        "eventi a roma", "eventi roma", "eventi del giorno", "eventi weekend", "cosa fare a",
+        "things to do in", "what to do in", "event calendar", "calendario eventi",
+        "eventi gratuiti", "mostre da vedere", "concerti a roma", "concerts in",
+    ]
+    if any(p in s for p in bad_phrases) and len(s) < 70:
+        return True
+    if any(x in u for x in ["/eventi/", "/events/"]) and len(s.split()) <= 3:
+        return True
+    return False
+
+
+def event_candidate_has_specificity_v48(ev: Dict[str, Any]) -> bool:
+    title = clean_text(ev.get("title"))
+    if title_is_index_or_category_v48(title, ev.get("source_url") or ev.get("ticket_url") or ""):
+        return False
+    # A real event should usually have at least one of: specific venue, ticket URL, source URL, artist/team/show style title.
+    if ev.get("venue") or ev.get("ticket_url") or ev.get("source_url"):
+        return True
+    return len(title.split()) >= 3
+
+
+def build_v48_search_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
+    city = location.get("city") or ""
+    city_key = slug(city)
+    country_code = location.get("country_code") or ""
+    country_name = location.get("country_name") or country_code
+    year = str((parse_date_safe(from_date) or date.today()).year)
+    terms = V48_CATEGORY_TERMS.get(category, V48_CATEGORY_TERMS[""])
+
+    queries: List[str] = []
+    for term in terms:
+        queries.append(f'{city} {country_name} {term} {from_date} {to_date}')
+        queries.append(f'{city} {term} official tickets {year}')
+
+    # Official portals by city.
+    domains = list(TRUSTED_EVENT_DOMAINS_BY_CITY.get(city_key, []))
+    if city_key in {"roma", "rome"}:
+        domains += TRUSTED_EVENT_DOMAINS_BY_CITY.get("roma", []) + TRUSTED_EVENT_DOMAINS_BY_CITY.get("rome", [])
+    if city_key == "tokyo" or country_code == "JP":
+        domains += V48_JAPAN_DOMAINS
+        jp_terms = ["東京 イベント", "東京 コンサート", "東京 ライブ", "東京 チケット", "東京 スポーツ", "東京 展覧会"]
+        if category == "concert":
+            jp_terms = ["東京 コンサート", "東京 ライブ", "東京 音楽 チケット", "東京 フェス"]
+        elif category == "sport":
+            jp_terms = ["東京 スポーツ チケット", "東京 野球", "東京 サッカー", "東京 相撲", "東京 Jリーグ"]
+        for jt in jp_terms:
+            queries.append(f'{jt} {year} {from_date} {to_date}')
+
+    for d in domains:
+        clean_d = d.replace("site:", "")
+        for term in terms[:4]:
+            queries.append(f'site:{clean_d} {city} {term} {year}')
+
+    # Global official portals for broad discovery.
+    for portal in V48_OFFICIAL_GLOBAL_DOMAINS:
+        for term in terms[:2]:
+            queries.append(f'{city} {portal} {term} {year}')
+
+    final: List[str] = []
+    seen = set()
+    for q in queries:
+        q = clean_text(q)
+        if not q:
+            continue
+        k = q.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        final.append(q)
+        if len(final) >= V48_MAX_QUERIES:
+            break
+    return final
+
+
+def serpapi_google_organic_v48(query: str, location: Dict[str, str]) -> List[Dict[str, Any]]:
+    if not SERPAPI_API_KEY:
+        return []
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": SERPAPI_API_KEY,
+        "hl": "ja" if location.get("country_code") == "JP" else "en",
+        "gl": (location.get("country_code") or "us").lower(),
+        "num": V48_MAX_GOOGLE_RESULTS_PER_QUERY,
+    }
+    ok, status, data, _ = http_get_json("https://serpapi.com/search.json", params)
+    if not ok or status != 200:
+        return []
+    return data.get("organic_results") or []
+
+
+def make_event_from_search_snippet_v48(
+    item: Dict[str, Any],
+    query: str,
+    location: Dict[str, str],
+    from_date: str,
+    to_date: str,
+) -> Optional[Dict[str, Any]]:
+    title = clean_text(item.get("title") or "")
+    snippet = clean_text(item.get("snippet") or "")
+    link = item.get("link")
+    if not title or not link:
+        return None
+    if title_is_index_or_category_v48(title, link):
+        return None
+    combined = " ".join([title, snippet, clean_text(item.get("displayed_link") or ""), query])
+    if result_year_conflicts(combined, from_date, to_date):
+        return None
+    if title_is_bad(title, link, ""):
+        return None
+    d, t, confidence = parse_any_event_date_v48(combined, from_date, to_date)
+    if not d or not confidence:
+        return None
+    temp = {"title": title, "start_date": d, "city": location.get("city"), "country": location.get("country_code"), "source_url": link}
+    if not is_within_dates(temp, from_date, to_date):
+        return None
+    cat, sub = category_from_title(title, "")
+    ev = make_event(
+        title=title,
+        category=cat,
+        subcategory=sub,
+        start_date=d,
+        start_time=t,
+        city=location.get("city") or "",
+        country=location.get("country_code") or "",
+        venue="",
+        source_name="V48 Hybrid Discovery",
+        source_url=link,
+        ticket_url=link,
+        image_url=None,
+        extra={
+            "v48_hybrid_discovery": True,
+            "v48_extraction_method": "google_snippet_explicit_date",
+            "date_confidence": 0.84,
+            "search_query": query,
+            "source_domain": domain_from_url(link),
+        },
+    )
+    return ev if event_candidate_has_specificity_v48(ev) else None
+
+
+def extract_page_events_v48(
+    url: str,
+    source_name: str,
+    location: Dict[str, str],
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> List[Dict[str, Any]]:
+    ok, status, body, final_url = http_get_text(url)
+    if not ok or status >= 400 or not body:
+        return []
+
+    ticket_links = extract_ticket_links_from_html(body, final_url)
+    default_ticket_url = ticket_links[0]["url"] if ticket_links else final_url
+
+    events = parse_jsonld_events_from_html(body, final_url, location, source_name)
+    events.extend(parse_anchor_local_events(body, final_url, location, source_name, from_date, to_date))
+
+    # Page itself as event page, but only if title is specific and date explicit.
+    if not events:
+        title = ""
+        for pat in [
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']',
+        ]:
+            m = re.search(pat, body, flags=re.I)
+            if m:
+                title = clean_text(html.unescape(m.group(1)))
+                break
+        if not title:
+            h1 = re.search(r'<h1[^>]*>([\s\S]{3,220}?)</h1>', body, flags=re.I)
+            if h1:
+                title = strip_html_tags(h1.group(1))
+        text_sample = strip_html_tags(body[:42000])
+        d, t, confidence = parse_any_event_date_v48(text_sample, from_date, to_date)
+        if title and d and confidence and not title_is_index_or_category_v48(title, final_url) and not title_is_bad(title, final_url, category):
+            cat, sub = category_from_title(title, category)
+            events.append(make_event(
+                title=title,
+                category=cat,
+                subcategory=sub,
+                start_date=d,
+                start_time=t,
+                city=location.get("city") or "",
+                country=location.get("country_code") or "",
+                venue="",
+                source_name=source_name,
+                source_url=final_url,
+                ticket_url=default_ticket_url,
+                image_url=None,
+                extra={"v48_hybrid_discovery": True, "v48_extraction_method": "page_meta_explicit_date", "date_confidence": 0.86},
+            ))
+
+    clean_events: List[Dict[str, Any]] = []
+    for ev in events:
+        if not is_within_dates(ev, from_date, to_date):
+            continue
+        if not event_candidate_has_specificity_v48(ev):
+            continue
+        if category:
+            ev_cat = ev.get("category")
+            if category == "sport" and ev_cat not in {"sport", "motorsport"}:
+                continue
+            if category != "sport" and ev_cat != category:
+                continue
+        ev["ticket_candidates"] = ticket_links
+        if (not ev.get("ticket_url")) or ev.get("ticket_url") == ev.get("source_url"):
+            ev["ticket_url"] = default_ticket_url
+        ev["source_priority"] = "v48_hybrid_extracted"
+        ev["v48_verified_real_page"] = True
+        clean_events.append(ev)
+    return clean_events[:30]
+
+
+def ai_search_extraction_events_v43(location: Dict[str, str], from_date: str, to_date: str, category: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """V48 override of the V43 extractor. Kept name so the existing get_events path uses it."""
+    if not ENABLE_AI_SEARCH_EXTRACTION or not SERPAPI_API_KEY:
+        return [], {"enabled": ENABLE_AI_SEARCH_EXTRACTION, "serpapi": bool(SERPAPI_API_KEY), "queries": []}
+
+    queries = build_v48_search_queries(location, from_date, to_date, category)
+    out: List[Dict[str, Any]] = []
+    fetched_pages = 0
+    seen_urls = set()
+
+    for q in queries:
+        for item in serpapi_google_organic_v48(q, location):
+            link = item.get("link")
+            if not link or link in seen_urls:
+                continue
+            seen_urls.add(link)
+
+            snippet_ev = make_event_from_search_snippet_v48(item, q, location, from_date, to_date)
+            if snippet_ev:
+                out.append(snippet_ev)
+
+            domain = domain_from_url(link)
+            item_text = slug(" ".join([item.get("title") or "", item.get("snippet") or "", link]))
+            trusted_city_domains = TRUSTED_EVENT_DOMAINS_BY_CITY.get(slug(location.get("city")), [])
+            if location.get("country_code") == "JP":
+                trusted_city_domains = list(set(trusted_city_domains + V48_JAPAN_DOMAINS))
+            promising = (
+                any(h in item_text for h in ["event", "eventi", "tickets", "biglietti", "programma", "calendar", "concert", "festival", "live", "チケット", "イベント", "ライブ", "公演"])
+                or any(d.replace("site:", "") in link for d in trusted_city_domains)
+                or any(p in domain for p in V48_OFFICIAL_GLOBAL_DOMAINS)
+            )
+            if promising and fetched_pages < V48_MAX_PAGES_TO_FETCH:
+                fetched_pages += 1
+                page_events = extract_page_events_v48(
+                    link,
+                    source_name=f"V48 Hybrid: {domain or 'web'}",
+                    location=location,
+                    from_date=from_date,
+                    to_date=to_date,
+                    category=category,
+                )
+                for ev in page_events:
+                    ev["search_query"] = q
+                    out.append(ev)
+            time.sleep(0.025)
+
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for ev in out:
+        if not event_candidate_has_specificity_v48(ev):
+            continue
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ev)
+
+    diag = {
+        "enabled": True,
+        "mode": "V48 Hybrid Discovery Engine",
+        "queries": queries,
+        "seen_urls": len(seen_urls),
+        "fetched_pages": fetched_pages,
+        "extracted_events": len(unique),
+        "japan_sources_enabled": location.get("country_code") == "JP",
+        "no_fake_source_cards": True,
+    }
+    return unique[:160], diag
+
+
+def collect_real_provider_events_v43(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
+    """V48 override: providers first + hybrid extraction. Existing get_events uses this name."""
+    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+    v48_events, v48_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+    events.extend(v48_events)
+    counts["hybrid_discovery_v48"] = len(v48_events)
+    counts["raw_total_with_v48"] = len(events)
+    return events, counts, v48_diag
+
+
 @app.get("/debug/ai-search-extraction")
 def debug_ai_search_extraction(
     city: str = Query(...),
@@ -3455,7 +3850,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v46-official-premium-first|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v48-hybrid-discovery|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -3507,6 +3902,10 @@ def get_events(
     )
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
     diag["v43_mode"] = "ai_meta_search_extraction_real_events_only"
+    diag["v48_hybrid_discovery_engine"] = True
+    diag["v48_global_event_intelligence"] = True
+    diag["v48_no_fake_source_cards"] = True
+    diag["v48_japan_sources_enabled"] = True
     diag["v42_local_sources_engine"] = True
     diag["v42_local_sources_enabled"] = ENABLE_LOCAL_SOURCES
     diag["v43_ai_search_extraction_engine"] = True
@@ -3519,7 +3918,7 @@ def get_events(
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
         "Non abbiamo ancora trovato abbastanza eventi live verificati per questa ricerca. "
-        "V43 legge il web, estrae eventi reali e scarta pagine non verificabili."
+        "V48 combina API, Google discovery, pagine ufficiali e parser locali: mostra solo eventi con data verificabile."
     )
 
     if write_snapshot:
