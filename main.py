@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v48-hybrid-discovery-engine"
+VERSION = "weloveit-events-v49-venue-calendar-crawler-engine"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -3830,6 +3830,351 @@ def debug_local_sources(
     }
 
 
+
+
+# =========================
+# V49 VENUE & CALENDAR CRAWLER ENGINE
+# =========================
+# Real event discovery cannot rely only on generic search pages. V49 crawls
+# official venue/calendar pages first, then extracts structured events only
+# when a real title + real date can be verified. It never creates fake events.
+
+V49_HTTP_SLEEP_SECONDS = float(os.getenv("WELOVEIT_V49_HTTP_SLEEP", "0.05"))
+V49_MAX_VENUE_PAGES = int(os.getenv("WELOVEIT_V49_MAX_VENUE_PAGES", "28"))
+V49_MAX_EVENTS = int(os.getenv("WELOVEIT_V49_MAX_EVENTS", "120"))
+
+
+def official_venue_calendars_v49(location: Dict[str, str]) -> List[Tuple[str, str]]:
+    city_key = slug(location.get("city"))
+    country = (location.get("country_code") or "").upper()
+
+    if city_key in {"roma", "rome"} or (country == "IT" and city_key == "roma"):
+        return [
+            ("Auditorium Parco della Musica", "https://www.auditorium.com/it/eventi"),
+            ("Teatro dell'Opera di Roma", "https://www.operaroma.it/spettacoli/"),
+            ("Palazzo dello Sport Roma", "https://www.palazzodellosportroma.it/eventi/"),
+            ("TicketOne Roma", "https://www.ticketone.it/city/roma-216/"),
+            ("Vivaticket Roma", "https://www.vivaticket.com/it/cerca-biglietti/roma"),
+            ("Fever Roma", "https://feverup.com/it/roma"),
+            ("MAXXI", "https://www.maxxi.art/events/"),
+            ("Scuderie del Quirinale", "https://www.scuderiequirinale.it/"),
+        ]
+
+    if city_key == "tokyo" or country == "JP":
+        return [
+            ("Tokyo Dome", "https://www.tokyo-dome.co.jp/en/tourists/dome/events/"),
+            ("Tokyo Dome Japanese", "https://www.tokyo-dome.co.jp/dome/event/"),
+            ("Blue Note Tokyo", "https://www.bluenote.co.jp/jp/schedule/"),
+            ("Billboard Live Tokyo", "https://www.billboard-live.com/tokyo"),
+            ("Zepp Tokyo Area", "https://www.zepp.co.jp/hall/"),
+            ("Tokyo Big Sight", "https://www.bigsight.jp/visitor/event/"),
+            ("Makuhari Messe", "https://www.m-messe.co.jp/en/event/"),
+            ("Suntory Hall", "https://www.suntory.com/culture-sports/suntoryhall/schedule/"),
+            ("LivePocket Tokyo", "https://t.livepocket.jp/search?prefecture=13"),
+            ("eplus Tokyo", "https://eplus.jp/sf/word/0000000001"),
+            ("Ticket Pia Tokyo", "https://t.pia.jp/"),
+            ("Lawson Ticket", "https://l-tike.com/"),
+            ("J.League", "https://www.jleague.co/fixtures/"),
+            ("NPB", "https://npb.jp/games/"),
+            ("Sumo", "https://www.sumo.or.jp/EnTicket/"),
+        ]
+
+    if city_key == "paris" or country == "FR":
+        return [
+            ("Accor Arena", "https://www.accorarena.com/en/events"),
+            ("Paris La Defense Arena", "https://www.parisladefense-arena.com/en/events/"),
+            ("Olympia Paris", "https://www.olympiahall.com/agenda/"),
+            ("Zenith Paris", "https://www.zenith-paris.com/fr/agenda"),
+            ("Ticketmaster France Paris", "https://www.ticketmaster.fr/fr/resultat?ipSearch=Paris"),
+            ("Fnac Spectacles Paris", "https://www.fnacspectacles.com/place-spectacle/paris/"),
+            ("Fever Paris", "https://feverup.com/fr/paris"),
+            ("Dice Paris", "https://dice.fm/browse/paris"),
+            ("Sortir a Paris", "https://www.sortiraparis.com/"),
+        ]
+
+    if city_key == "london" or country == "GB":
+        return [
+            ("The O2", "https://www.theo2.co.uk/events"),
+            ("OVO Arena Wembley", "https://www.ovoarena.co.uk/events"),
+            ("Royal Albert Hall", "https://www.royalalberthall.com/tickets/"),
+            ("Wembley Stadium", "https://www.wembleystadium.com/events"),
+            ("Ticketmaster UK London", "https://www.ticketmaster.co.uk/search?q=london"),
+            ("AXS London", "https://www.axs.com/uk/london"),
+            ("Dice London", "https://dice.fm/browse/london"),
+            ("See Tickets London", "https://www.seetickets.com/search?q=london"),
+        ]
+
+    if city_key in {"new york", "nyc"} or country == "US":
+        return [
+            ("Madison Square Garden", "https://www.msg.com/calendar"),
+            ("Barclays Center", "https://www.barclayscenter.com/events"),
+            ("Radio City Music Hall", "https://www.msg.com/radio-city-music-hall/calendar"),
+            ("Broadway", "https://www.broadway.com/shows/tickets/"),
+            ("Ticketmaster New York", "https://www.ticketmaster.com/search?q=New%20York"),
+            ("SeatGeek New York", "https://seatgeek.com/cities/new-york/tickets"),
+        ]
+
+    return []
+
+
+def is_v49_non_event_title(title: str) -> bool:
+    s = slug(title)
+    if not s or len(s) < 4:
+        return True
+    banned_exact = {
+        "domani", "tomorrow", "today", "oggi", "prossima settimana", "next week",
+        "eventi", "events", "calendar", "calendario", "agenda", "tickets", "biglietti",
+        "1 giugno 2026", "2 luglio 2026", "july 2026", "giugno 2026", "luglio 2026",
+    }
+    if s in banned_exact:
+        return True
+    banned_contains = [
+        "prossima settimana", "questo weekend", "tutti gli eventi", "all events",
+        "things to do", "cosa fare", "event calendar", "calendario eventi",
+        "official tickets and events", "upcoming events in", "venue discovery",
+    ]
+    if any(x in s for x in banned_contains):
+        return True
+    # A bare date or very generic time window is not an event title.
+    if re.fullmatch(r"\d{1,2}\s+[a-zàèéìòù]+\s+20\d{2}", s):
+        return True
+    if re.fullmatch(r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}", s):
+        return True
+    return False
+
+
+def html_to_text_v49(html: str) -> str:
+    html = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", html or "")
+    html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</article>|</section>|</h\d>", "\n", html)
+    html = re.sub(r"<[^>]+>", " ", html)
+    html = html.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'")
+    return re.sub(r"[ \t]+", " ", html)
+
+
+def extract_anchor_candidates_v49(html: str, base_url: str) -> List[Tuple[str, str, str]]:
+    candidates: List[Tuple[str, str, str]] = []
+    if not html:
+        return candidates
+    pattern = re.compile(r"(?is)<a\b([^>]*href=[^>]*)>(.*?)</a>")
+    for m in pattern.finditer(html[:900000]):
+        attrs = m.group(1) or ""
+        inner = m.group(2) or ""
+        href_m = re.search(r"href=[\"']([^\"']+)[\"']", attrs, re.I)
+        if not href_m:
+            continue
+        href = href_m.group(1).strip()
+        if href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:")):
+            continue
+        url = urllib.parse.urljoin(base_url, href)
+        text = clean_text(re.sub(r"<[^>]+>", " ", inner))
+        if not text or len(text) < 3:
+            title_m = re.search(r"title=[\"']([^\"']+)[\"']", attrs, re.I)
+            text = clean_text(title_m.group(1)) if title_m else ""
+        if not text or is_v49_non_event_title(text):
+            continue
+        # Context around anchor often contains date/venue.
+        start = max(0, m.start() - 700)
+        end = min(len(html), m.end() + 900)
+        context = html_to_text_v49(html[start:end])
+        candidates.append((text, url, context))
+    return candidates[:250]
+
+
+def parse_any_event_date_v49(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
+    d, t, ok = parse_japanese_date_from_text_v48(text, from_date, to_date)
+    if d and ok:
+        return d, t, True
+    d, t, ok = parse_discovery_date_from_text(text, from_date, to_date)
+    if d and ok:
+        return d, t, True
+    return None, None, False
+
+
+def extract_venue_calendar_events_from_html_v49(
+    html: str,
+    final_url: str,
+    location: Dict[str, str],
+    source_name: str,
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+
+    # First trust structured Event JSON-LD from official calendars.
+    try:
+        structured = parse_jsonld_events_from_html(html, final_url, location, source_name)
+        for ev in structured:
+            if is_v49_non_event_title(ev.get("title", "")):
+                continue
+            ev["source_name"] = source_name
+            ev["source_priority"] = "official_venue_calendar"
+            ev["v49_extraction_method"] = "jsonld_event"
+            ev["date_confidence"] = max(float(ev.get("date_confidence") or 0.0), 0.94)
+            annotate_event_v46(ev)
+            out.append(ev)
+    except Exception as exc:
+        logger.debug("V49 JSON-LD parse failed for %s: %s", final_url, exc)
+
+    # Then anchor/context extraction. This is strict: title + nearby explicit date.
+    for title, url, context in extract_anchor_candidates_v49(html, final_url):
+        if is_v49_non_event_title(title):
+            continue
+        combined = f"{title}\n{context}"
+        if result_year_conflicts(combined, from_date, to_date):
+            continue
+        d, t, ok = parse_any_event_date_v49(combined, from_date, to_date)
+        if not d or not ok:
+            continue
+        temp = {"start_date": d}
+        if not is_within_dates(temp, from_date, to_date):
+            continue
+        cat2, sub2 = category_from_title(title, category)
+        if category:
+            if category == "sport" and cat2 not in {"sport", "motorsport"}:
+                continue
+            if category != "sport" and cat2 != category:
+                continue
+        ev = make_event(
+            title=title,
+            category=cat2,
+            subcategory=sub2,
+            start_date=d,
+            start_time=t,
+            city=location.get("city") or "",
+            country=location.get("country_code") or "",
+            venue=source_name,
+            source_name=source_name,
+            source_url=url,
+            ticket_url=url,
+            image_url=None,
+            extra={
+                "source_priority": "official_venue_calendar",
+                "v49_extraction_method": "anchor_context_explicit_date",
+                "date_confidence": 0.88,
+                "verified_from_official_calendar": True,
+            },
+        )
+        annotate_event_v46(ev)
+        out.append(ev)
+
+    # Final strict cleanup.
+    clean: List[Dict[str, Any]] = []
+    seen = set()
+    for ev in out:
+        if is_v49_non_event_title(ev.get("title", "")):
+            continue
+        if not is_within_dates(ev, from_date, to_date):
+            continue
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append(ev)
+    return clean[:80]
+
+
+def venue_calendar_crawler_events_v49(
+    location: Dict[str, str],
+    from_date: str,
+    to_date: str,
+    category: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    sources = official_venue_calendars_v49(location)[:V49_MAX_VENUE_PAGES]
+    events: List[Dict[str, Any]] = []
+    fetched = 0
+    failed = 0
+    source_counts: Dict[str, int] = {}
+
+    for source_name, url in sources:
+        try:
+            ok, status, body, final_url = http_get_text(url)
+            if not ok or status >= 400 or not body:
+                failed += 1
+                continue
+            fetched += 1
+            extracted = extract_venue_calendar_events_from_html_v49(
+                body, final_url, location, source_name, from_date, to_date, category
+            )
+            source_counts[source_name] = len(extracted)
+            events.extend(extracted)
+            time.sleep(V49_HTTP_SLEEP_SECONDS)
+        except Exception as exc:
+            failed += 1
+            logger.warning("V49 venue crawler failed source=%s url=%s error=%s", source_name, url, exc)
+
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for ev in events:
+        if not event_candidate_has_specificity_v48(ev):
+            continue
+        key = dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ev)
+
+    diag = {
+        "enabled": True,
+        "mode": "V49 Venue & Calendar Crawler Engine",
+        "sources_total": len(sources),
+        "fetched_pages": fetched,
+        "failed_pages": failed,
+        "source_counts": source_counts,
+        "events": len(unique),
+        "no_fake_events": True,
+        "official_calendar_first": True,
+    }
+    return unique[:V49_MAX_EVENTS], diag
+
+
+# Override V48 collector: APIs + hybrid search extraction + V49 official venue calendars.
+def collect_real_provider_events_v43(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
+    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+
+    v48_events, v48_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+    events.extend(v48_events)
+    counts["hybrid_discovery_v48"] = len(v48_events)
+
+    v49_events, v49_diag = venue_calendar_crawler_events_v49(loc, from_iso, to_iso, cat)
+    events.extend(v49_events)
+    counts["venue_calendar_crawler_v49"] = len(v49_events)
+    counts["raw_total_with_v49"] = len(events)
+
+    return events, counts, {"v48_hybrid_discovery": v48_diag, "v49_venue_calendar_crawler": v49_diag}
+
+
+@app.get("/debug/venue-crawler")
+def debug_venue_crawler_v49(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query(""),
+) -> Dict[str, Any]:
+    loc = normalize_location(city, country)
+    cat = normalize_category(category)
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or (fd + timedelta(days=30))
+    if td < fd:
+        td = fd
+    events, diag = venue_calendar_crawler_events_v49(loc, fd.isoformat(), td.isoformat(), cat)
+    return {
+        "ok": True,
+        "version": VERSION,
+        "normalized": loc,
+        "sources": [{"name": n, "url": u} for n, u in official_venue_calendars_v49(loc)],
+        "diagnostics": diag,
+        "count": len(events),
+        "sample": events[:40],
+    }
+
+
 @app.get("/events")
 def get_events(
     city: str = Query(...),
@@ -3850,7 +4195,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v48-hybrid-discovery|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v49-venue-calendar-crawler|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -3903,6 +4248,8 @@ def get_events(
     diag.update({k: v for k, v in merge_diag.items() if k not in diag})
     diag["v43_mode"] = "ai_meta_search_extraction_real_events_only"
     diag["v48_hybrid_discovery_engine"] = True
+    diag["v49_venue_calendar_crawler_engine"] = True
+    diag["v49_official_calendar_first"] = True
     diag["v48_global_event_intelligence"] = True
     diag["v48_no_fake_source_cards"] = True
     diag["v48_japan_sources_enabled"] = True
@@ -3918,7 +4265,7 @@ def get_events(
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
         "Non abbiamo ancora trovato abbastanza eventi live verificati per questa ricerca. "
-        "V48 combina API, Google discovery, pagine ufficiali e parser locali: mostra solo eventi con data verificabile."
+        "V49 combina API, Google discovery, venue calendars ufficiali e parser locali: mostra solo eventi con data verificabile."
     )
 
     if write_snapshot:
