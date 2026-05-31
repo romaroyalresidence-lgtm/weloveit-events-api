@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v49-venue-calendar-crawler-engine"
+VERSION = "weloveit-events-v50-japan-sports-official-engine"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -3876,6 +3876,11 @@ def official_venue_calendars_v49(location: Dict[str, str]) -> List[Tuple[str, st
             ("Lawson Ticket", "https://l-tike.com/"),
             ("J.League", "https://www.jleague.co/fixtures/"),
             ("NPB", "https://npb.jp/games/"),
+            ("Yomiuri Giants", "https://www.giants.jp/en/schedule/"),
+            ("Tokyo Yakult Swallows", "https://www.yakult-swallows.co.jp/en/schedule/"),
+            ("Japan Rugby Football Union", "https://www.rugby-japan.jp/en/schedule/"),
+            ("Japan Rugby Tickets", "https://ticket-rugby.jp/"),
+            ("Chichibunomiya Rugby Stadium", "https://www.jpnsport.go.jp/chichibunomiya/"),
             ("Sumo", "https://www.sumo.or.jp/EnTicket/"),
         ]
 
@@ -4175,6 +4180,297 @@ def debug_venue_crawler_v49(
     }
 
 
+
+# =========================
+# V50 JAPAN SPORTS OFFICIAL ENGINE
+# =========================
+# Purpose: V49 found venue calendars but still missed official sports fixtures,
+# especially Tokyo baseball, Japan national rugby, J.League and sumo.
+# V50 adds official sports discovery using Google Events + official-site organic results.
+
+V50_MAX_SPORT_QUERIES = int(os.getenv("WELOVEIT_V50_MAX_SPORT_QUERIES", "16"))
+V50_MAX_SPORT_RESULTS = int(os.getenv("WELOVEIT_V50_MAX_SPORT_RESULTS", "60"))
+
+
+def japan_sports_queries_v50(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
+    city = location.get("city") or "Tokyo"
+    year = (from_date or today_iso())[:4]
+    month_hint = ""
+    fd = parse_date_safe(from_date)
+    td = parse_date_safe(to_date)
+    if fd and td and fd.month == td.month:
+        month_hint = fd.strftime("%B")
+    elif fd:
+        month_hint = fd.strftime("%B")
+
+    if (location.get("country_code") or "").upper() != "JP" and slug(city) != "tokyo":
+        return []
+
+    if category and category not in {"sport", "sports"}:
+        return []
+
+    q = [
+        f"Tokyo baseball games {month_hint} {year} tickets official",
+        f"Yomiuri Giants Tokyo Dome schedule {month_hint} {year} tickets",
+        f"Tokyo Yakult Swallows schedule {month_hint} {year} tickets",
+        f"NPB Tokyo baseball fixtures {month_hint} {year} tickets",
+        f"site:npb.jp Tokyo baseball {month_hint} {year}",
+        f"site:giants.jp Tokyo Dome schedule {month_hint} {year}",
+        f"site:yakult-swallows.co.jp schedule {month_hint} {year}",
+        f"Japan national rugby Tokyo {month_hint} {year} tickets",
+        f"Japan rugby national team Tokyo {month_hint} {year} tickets",
+        f"site:rugby-japan.jp Tokyo rugby {month_hint} {year}",
+        f"site:japan-rugby.jp Tokyo rugby {month_hint} {year}",
+        f"site:ticket-rugby.jp Japan rugby Tokyo {month_hint} {year}",
+        f"J League Tokyo fixtures {month_hint} {year} tickets",
+        f"FC Tokyo fixtures {month_hint} {year} tickets",
+        f"Tokyo Verdy fixtures {month_hint} {year} tickets",
+        f"sumo Tokyo tournament {month_hint} {year} tickets Ryogoku Kokugikan",
+    ]
+    return [clean_text(x) for x in q if clean_text(x)][:V50_MAX_SPORT_QUERIES]
+
+
+def japan_sport_subcategory_v50(title: str, url: str = "") -> Tuple[str, str, str]:
+    s = slug(f"{title} {url}")
+    if any(x in s for x in ["baseball", "npb", "giants", "yomiuri", "swallows", "yakult", "tokyo dome"]):
+        venue = "Tokyo Dome" if any(x in s for x in ["giants", "yomiuri", "tokyo dome"]) else "Meiji Jingu Stadium"
+        return "sport", "Baseball / NPB", venue
+    if any(x in s for x in ["rugby", "brave blossoms", "jrfu", "japan national"]):
+        venue = "Japan National Stadium / Chichibunomiya Rugby Stadium"
+        return "sport", "Rugby Union", venue
+    if any(x in s for x in ["j league", "j.league", "fc tokyo", "verdy", "football", "soccer"]):
+        return "sport", "Football / J.League", "Ajinomoto Stadium / Tokyo area"
+    if any(x in s for x in ["sumo", "ryogoku", "kokugikan"]):
+        return "sport", "Sumo", "Ryogoku Kokugikan"
+    return "sport", "Sports", "Tokyo sports venue"
+
+
+def title_is_bad_sport_search_v50(title: str, url: str = "") -> bool:
+    s = slug(title)
+    if is_v49_non_event_title(title):
+        return True
+    bad = [
+        "standings", "ranking", "news", "latest news", "homepage", "official site", "top page",
+        "schedule list", "calendar", "access", "guide", "shop", "goods", "fan club",
+    ]
+    if any(x in s for x in bad):
+        return True
+    # Bare source names are not events.
+    if s in {"npb", "yomiuri giants", "tokyo yakult swallows", "japan rugby", "j league", "sumo"}:
+        return True
+    return False
+
+
+def serpapi_google_events_japan_sports_v50(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    if not SERPAPI_API_KEY:
+        return []
+    out: List[Dict[str, Any]] = []
+    for q in japan_sports_queries_v50(location, from_date, to_date, category)[:10]:
+        params = {
+            "engine": "google_events",
+            "q": q,
+            "api_key": SERPAPI_API_KEY,
+            "hl": "en",
+            "gl": "jp",
+        }
+        ok, status, data, _ = http_get_json("https://serpapi.com/search.json", params)
+        if not ok or status != 200:
+            continue
+        for item in data.get("events_results", []) or []:
+            title = clean_text(item.get("title") or "")
+            if title_is_bad_sport_search_v50(title, item.get("link") or ""):
+                continue
+            d, t = parse_serpapi_date(item.get("date") or {}, from_date, to_date)
+            if not d:
+                combined = json.dumps(item, ensure_ascii=False)
+                d, t, conf = parse_any_event_date_v49(combined, from_date, to_date)
+                if not d:
+                    continue
+            temp = {"title": title, "start_date": d, "city": "Tokyo", "country": "JP"}
+            if not is_within_dates(temp, from_date, to_date):
+                continue
+            cat2, sub, venue_hint = japan_sport_subcategory_v50(title, item.get("link") or "")
+            address = item.get("address") or []
+            venue = venue_hint
+            if address:
+                venue = clean_text(str(address[0]).split(",")[0]) or venue_hint
+            ev = make_event(
+                title=title,
+                category=cat2,
+                subcategory=sub,
+                start_date=d,
+                start_time=t,
+                city="Tokyo",
+                country="JP",
+                venue=venue,
+                source_name="Google Events / Japan Sports",
+                source_url=item.get("link"),
+                ticket_url=item.get("link"),
+                image_url=item.get("thumbnail") if isinstance(item.get("thumbnail"), str) else None,
+                extra={
+                    "v50_japan_sports": True,
+                    "v50_query": q,
+                    "date_confidence": 0.94,
+                    "source_priority": "official_sports_discovery",
+                },
+            )
+            annotate_event_v46(ev)
+            out.append(ev)
+        time.sleep(0.05)
+    return out[:V50_MAX_SPORT_RESULTS]
+
+
+def organic_japan_sports_v50(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[Dict[str, Any]]:
+    if not SERPAPI_API_KEY:
+        return []
+    out: List[Dict[str, Any]] = []
+    for q in japan_sports_queries_v50(location, from_date, to_date, category):
+        params = {
+            "engine": "google",
+            "q": q,
+            "api_key": SERPAPI_API_KEY,
+            "hl": "en",
+            "gl": "jp",
+            "num": 10,
+        }
+        ok, status, data, _ = http_get_json("https://serpapi.com/search.json", params)
+        if not ok or status != 200:
+            continue
+        for item in data.get("organic_results", []) or []:
+            title = clean_text(item.get("title") or "")
+            link = item.get("link") or ""
+            snippet = clean_text(item.get("snippet") or "")
+            displayed = clean_text(item.get("displayed_link") or "")
+            if not title or not link:
+                continue
+            if title_is_bad_sport_search_v50(title, link):
+                continue
+            domain = domain_from_url(link)
+            if not any(x in domain for x in ["npb.jp", "giants.jp", "yakult-swallows.co.jp", "rugby-japan.jp", "japan-rugby.jp", "ticket-rugby.jp", "jleague", "sumo.or.jp", "tokyo-dome.co.jp"]):
+                continue
+            combined = " ".join([title, snippet, displayed, link, q])
+            if result_year_conflicts(combined, from_date, to_date):
+                continue
+            d, t, conf = parse_any_event_date_v49(combined, from_date, to_date)
+            if not d:
+                continue
+            temp = {"title": title, "start_date": d, "city": "Tokyo", "country": "JP"}
+            if not is_within_dates(temp, from_date, to_date):
+                continue
+            cat2, sub, venue = japan_sport_subcategory_v50(title, link)
+            ev = make_event(
+                title=title,
+                category=cat2,
+                subcategory=sub,
+                start_date=d,
+                start_time=t,
+                city="Tokyo",
+                country="JP",
+                venue=venue,
+                source_name="Japan Official Sports Search",
+                source_url=link,
+                ticket_url=link,
+                image_url=fallback_image_for_event(title, "sport", sub, venue),
+                extra={
+                    "v50_japan_sports": True,
+                    "v50_query": q,
+                    "date_confidence": 0.90,
+                    "source_priority": "official_sports_search",
+                },
+            )
+            annotate_event_v46(ev)
+            out.append(ev)
+        time.sleep(0.05)
+    return out[:V50_MAX_SPORT_RESULTS]
+
+
+def japan_sports_official_events_v50(location: Dict[str, str], from_date: str, to_date: str, category: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if (location.get("country_code") or "").upper() != "JP" and slug(location.get("city")) != "tokyo":
+        return [], {"enabled": False, "reason": "not_japan"}
+    if category and category not in {"sport", "sports"}:
+        return [], {"enabled": False, "reason": "category_not_sport"}
+
+    events: List[Dict[str, Any]] = []
+    ge = serpapi_google_events_japan_sports_v50(location, from_date, to_date, category)
+    org = organic_japan_sports_v50(location, from_date, to_date, category)
+    events.extend(ge)
+    events.extend(org)
+
+    # Dedupe early.
+    seen = set()
+    unique = []
+    for ev in events:
+        k = dedupe_key(ev)
+        if k in seen:
+            continue
+        seen.add(k)
+        unique.append(ev)
+
+    diag = {
+        "enabled": True,
+        "queries": japan_sports_queries_v50(location, from_date, to_date, category),
+        "google_events_count": len(ge),
+        "organic_official_count": len(org),
+        "deduped_count": len(unique),
+        "sports_covered": ["NPB baseball", "Yomiuri Giants", "Tokyo Yakult Swallows", "Japan national rugby", "J.League", "sumo"],
+    }
+    return unique[:V50_MAX_SPORT_RESULTS], diag
+
+
+# V50 override: providers + hybrid extraction + venue calendars + Japan official sports.
+def collect_real_provider_events_v43(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
+    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+
+    v48_events, v48_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+    events.extend(v48_events)
+    counts["hybrid_discovery_v48"] = len(v48_events)
+
+    v49_events, v49_diag = venue_calendar_crawler_events_v49(loc, from_iso, to_iso, cat)
+    events.extend(v49_events)
+    counts["venue_calendar_crawler_v49"] = len(v49_events)
+
+    v50_events, v50_diag = japan_sports_official_events_v50(loc, from_iso, to_iso, cat)
+    events.extend(v50_events)
+    counts["japan_sports_official_v50"] = len(v50_events)
+    counts["raw_total_with_v50"] = len(events)
+
+    return events, counts, {
+        "v48_hybrid_discovery": v48_diag,
+        "v49_venue_calendar_crawler": v49_diag,
+        "v50_japan_sports_official": v50_diag,
+    }
+
+
+@app.get("/debug/japan-sports")
+def debug_japan_sports_v50(
+    city: str = Query("Tokyo"),
+    country: str = Query("JP"),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query("sport"),
+) -> Dict[str, Any]:
+    loc = normalize_location(city, country)
+    cat = normalize_category(category)
+    fd = parse_date_safe(from_date) or date.today()
+    td = parse_date_safe(to_date) or (fd + timedelta(days=30))
+    if td < fd:
+        td = fd
+    events, diag = japan_sports_official_events_v50(loc, fd.isoformat(), td.isoformat(), cat)
+    return {
+        "ok": True,
+        "version": VERSION,
+        "normalized": loc,
+        "diagnostics": diag,
+        "count": len(events),
+        "sample": events[:40],
+    }
+
+
 @app.get("/events")
 def get_events(
     city: str = Query(...),
@@ -4195,7 +4491,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v49-venue-calendar-crawler|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v50-japan-sports-official|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -4249,6 +4545,8 @@ def get_events(
     diag["v43_mode"] = "ai_meta_search_extraction_real_events_only"
     diag["v48_hybrid_discovery_engine"] = True
     diag["v49_venue_calendar_crawler_engine"] = True
+    diag["v50_japan_sports_official_engine"] = True
+    diag["v50_npb_rugby_jleague_sumo_enabled"] = True
     diag["v49_official_calendar_first"] = True
     diag["v48_global_event_intelligence"] = True
     diag["v48_no_fake_source_cards"] = True
