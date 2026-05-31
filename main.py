@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v42-real-local-sources-engine"
+VERSION = "weloveit-events-v45-real-events-local-sources-stable"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -140,7 +140,7 @@ def validate_event_v36(
         or "venue discovery" in source_name
         or source_name in {"v39 expanded discovery", "v39 venue discovery", "japan official fallback", "sports official fallback"}
     ):
-        return False, "synthetic_or_fallback_card_rejected"
+        return False, "v45_synthetic_or_fallback_card_rejected"
 
     if title_is_bad(title, ev.get("source_url"), ev.get("category", "")):
         return False, "bad_or_low_quality_title"
