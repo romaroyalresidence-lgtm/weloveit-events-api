@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v45-real-events-local-sources-stable"
+VERSION = "weloveit-events-v46-global-official-premium-first"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -795,24 +795,123 @@ def result_year_conflicts(text: str, from_date: str, to_date: str) -> bool:
     return not bool(years & allowed_years)
 
 
+OFFICIAL_TICKET_DOMAINS = [
+    "ticketmaster.", "ticketone.it", "vivaticket.", "seatgeek.", "eventbrite.",
+    "dice.fm", "feverup.com", "ra.co", "axs.com", "axs.co.uk", "seetickets.",
+    "fnacspectacles.com", "francebillet.com", "eplus.jp", "t.pia.jp", "l-tike.com",
+    "ticket.rakuten.co.jp", "pia.jp", "stubhub.", "ticketek.", "vivenu."
+]
+
+OFFICIAL_VENUE_DOMAINS = [
+    "auditorium.com", "operaroma.it", "accorarena.com", "philharmoniedeparis.fr",
+    "wembleystadium.com", "theo2.co.uk", "msg.com", "barclayscenter.com",
+    "tokyo-dome.co.jp", "bigsight.jp", "sumo.or.jp", "jleague.jp", "npb.jp",
+    "asroma.com", "sslazio.it", "stadiolimpico.it", "maxxi.art", "scuderiequirinale.it",
+    "palazzoesposizioniroma.it", "royalalberthall.com", "royaloperahouse.org"
+]
+
+EDITORIAL_LOCAL_DOMAINS = [
+    "romatoday.it", "timeout.com", "sortiraparis.com", "tokyocheapo.com",
+    "tokyoweekender.com", "wantedinrome.com", "parisjetaime.com", "visitlondon.com",
+    "turismoroma.it", "nyc.com/events"
+]
+
+MAJOR_EVENT_KEYWORDS = [
+    "world tour", "stadium tour", "final", "grand prix", "formula 1", "f1", "motogp",
+    "champions league", "serie a", "premier league", "nba", "nfl", "ufc", "atp", "wta",
+    "wimbledon", "roland garros", "us open", "internazionali bnl", "italian open",
+    "festival", "arena", "olympics", "world cup", "six nations"
+]
+
+PREMIUM_VENUE_KEYWORDS = [
+    "stadio olimpico", "foro italico", "palazzo dello sport", "auditorium", "parco della musica",
+    "teatro dell'opera", "opera", "maxxi", "wembley", "o2 arena", "royal albert hall",
+    "accor arena", "philharmonie", "tokyo dome", "nippon budokan", "saitama super arena",
+    "madison square garden", "barclays center"
+]
+
+MINOR_EVENT_KEYWORDS = [
+    "walking tour", "visita guidata", "guided tour", "mercatino", "market", "workshop",
+    "class", "lezione", "aperitivo", "brunch", "degustazione", "kids", "children",
+    "free entry", "open day", "seminar", "webinar"
+]
+
+
+def source_blob(ev_or_source: Any, url: str = "") -> str:
+    if isinstance(ev_or_source, dict):
+        return slug(" ".join([
+            str(ev_or_source.get("source_name") or ""),
+            str(ev_or_source.get("source_url") or ""),
+            str(ev_or_source.get("ticket_url") or ""),
+            str(ev_or_source.get("url") or ""),
+        ]))
+    return slug(f"{ev_or_source or ''} {url or ''}")
+
+
+def source_tier(ev: Dict[str, Any]) -> str:
+    blob = source_blob(ev)
+    if any(d in blob for d in OFFICIAL_TICKET_DOMAINS):
+        return "official_ticketing"
+    if any(d in blob for d in OFFICIAL_VENUE_DOMAINS):
+        return "official_venue"
+    if "ticketmaster" in blob or "seatgeek" in blob or "eventbrite" in blob:
+        return "official_ticketing"
+    if "predicthq" in blob or "serpapi" in blob or "google events" in blob or "search discovery" in blob or "ai search extraction" in blob:
+        return "verified_discovery"
+    if any(d in blob for d in EDITORIAL_LOCAL_DOMAINS):
+        return "local_editorial"
+    return "standard"
+
+
 def source_weight(source_name: str) -> int:
     s = slug(source_name)
     if "ticketmaster" in s:
-        return 45
+        return 60
     if "seatgeek" in s:
-        return 38
+        return 54
     if "eventbrite" in s:
-        return 32
-    if "search discovery" in s:
-        return 34
+        return 48
+    if "ticketone" in s or "vivaticket" in s or "dice" in s or "fever" in s:
+        return 55
+    if "search discovery" in s or "ai search extraction" in s:
+        return 36
     if "serpapi" in s or "sports expansion" in s:
-        return 30
+        return 34
     if "predicthq" in s:
-        return 20
+        return 30
+    if "romatoday" in s or "timeout" in s or "sortir" in s or "cheapo" in s:
+        return 16
     if "fallback" in s:
-        return 5
-    return 10
+        return 1
+    return 22
 
+
+def event_importance_tier(ev: Dict[str, Any]) -> str:
+    text = slug(" ".join([
+        str(ev.get("title") or ""),
+        str(ev.get("venue") or ""),
+        str(ev.get("subcategory") or ""),
+        str(ev.get("source_name") or ""),
+    ]))
+    tier = source_tier(ev)
+    if any(k in text for k in MAJOR_EVENT_KEYWORDS):
+        return "major"
+    if any(k in text for k in PREMIUM_VENUE_KEYWORDS):
+        return "premium"
+    if tier in {"official_ticketing", "official_venue"}:
+        return "verified"
+    if any(k in text for k in MINOR_EVENT_KEYWORDS):
+        return "minor"
+    if tier == "local_editorial":
+        return "local"
+    return "standard"
+
+
+def annotate_event_v46(ev: Dict[str, Any]) -> Dict[str, Any]:
+    ev["source_tier"] = source_tier(ev)
+    ev["importance_tier"] = event_importance_tier(ev)
+    ev["official_first_v46"] = True
+    return ev
 
 def fame_boost(title: str, venue: str, subcategory: str) -> int:
     s = slug(f"{title} {venue} {subcategory}")
@@ -861,88 +960,124 @@ def fame_boost(title: str, venue: str, subcategory: str) -> int:
 
 
 def compute_score(ev: Dict[str, Any], location: Dict[str, str], requested_category: str) -> int:
-    score = 55
+    ev = annotate_event_v46(ev)
+    score = 50
 
     title = slug(ev.get("title"))
     venue = slug(ev.get("venue"))
     sub = slug(ev.get("subcategory"))
+    tier = ev.get("source_tier") or source_tier(ev)
+    importance = ev.get("importance_tier") or event_importance_tier(ev)
     source = slug(ev.get("source_name"))
 
-    # Fonte dati: provider più affidabili valgono di più
-    if "ticketmaster" in source:
-        score += 12
-    elif "seatgeek" in source:
-        score += 10
-    elif "eventbrite" in source:
-        score += 9
-    elif "search discovery" in source:
+    # V46 global rule: official ticketing and official venue pages first, everywhere.
+    if tier == "official_ticketing":
+        score += 28
+    elif tier == "official_venue":
+        score += 24
+    elif tier == "verified_discovery":
+        score += 14
+    elif tier == "standard":
         score += 8
-    elif "serpapi" in source or "sports expansion" in source:
-        score += 7
-    elif "predicthq" in source:
-        score += 4
-    elif "fallback" in source:
-        score -= 5
+    elif tier == "local_editorial":
+        score -= 8
 
-    # Qualità scheda evento
-    if ev.get("image_url"):
+    if importance == "major":
+        score += 18
+    elif importance == "premium":
+        score += 14
+    elif importance == "verified":
+        score += 10
+    elif importance == "standard":
         score += 4
+    elif importance == "local":
+        score -= 5
+    elif importance == "minor":
+        score -= 14
+
+    # Provider quality.
+    score += min(12, max(0, source_weight(ev.get("source_name", "")) // 5))
+
+    if ev.get("image_url"):
+        score += 3
     if ev.get("image_is_fallback"):
         score -= 2
     if ev.get("ticket_url") and "google.com/search" not in str(ev.get("ticket_url")):
-        score += 5
+        score += 7
     if ev.get("venue"):
-        score += 3
+        score += 4
     if ev.get("start_time"):
         score += 2
-    if (ev.get("ticket_source_count") or 0) >= 3:
-        score += 4
+    if (ev.get("ticket_source_count") or 0) >= 2:
+        score += 5
     if city_matches(ev, location):
-        score += 8
+        score += 7
+    else:
+        score -= 6
 
-    # Coerenza categoria richiesta
     if requested_category == "sport" and ev.get("category") in {"sport", "motorsport"}:
         score += 6
     elif requested_category and ev.get("category") == requested_category:
         score += 5
 
-    # Boost fama artista/evento/venue
-    score += fame_boost(
-        ev.get("title", ""),
-        ev.get("venue", ""),
-        ev.get("subcategory", "")
-    )
+    score += fame_boost(ev.get("title", ""), ev.get("venue", ""), ev.get("subcategory", ""))
 
-    # Boost extra per sport/eventi premium
-    if any(k in title for k in ["final", "open", "championship", "cup", "grand prix", "internazionali"]):
-        score += 5
-
-    if "tennis" in sub or any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 6
-
-    if is_rome(location) and any(k in title or k in venue for k in TENNIS_ROMA_KEYWORDS):
-        score += 5
-
-    # Penalità eventi deboli o poco utili
     if title_is_bad(ev.get("title", ""), ev.get("source_url"), ev.get("category", "")):
-        score -= 35
-
+        score -= 40
     if "predicthq" in source and not ev.get("source_url"):
         score -= 8
-
     if ev.get("search_date_confidence") is False:
         score -= 25
-
     if len(title) < 8:
         score -= 8
 
-    # Micro-variazione stabile per evitare punteggi tutti uguali
-    variation_seed = slug(ev.get("title", "")) + str(ev.get("start_date", "")) + str(ev.get("venue", ""))
-    variation = sum(ord(c) for c in variation_seed) % 7
-    score += variation
+    # Stable micro-variation only after real ranking has been applied.
+    variation_seed = title + str(ev.get("start_date", "")) + venue
+    score += sum(ord(c) for c in variation_seed) % 5
 
-    return max(60, min(99, score))
+    return max(40, min(99, score))
 
+
+def rebalance_results_v46(events: List[Dict[str, Any]], location: Dict[str, str], requested_category: str) -> List[Dict[str, Any]]:
+    """
+    Prevents low-value local/editorial sites from dominating any city.
+    It does not invent events; it only caps weak editorial results and promotes official/premium ones.
+    """
+    annotated = [annotate_event_v46(e) for e in events]
+    for e in annotated:
+        e["ai_score"] = compute_score(e, location, requested_category)
+        e["quality_score"] = e["ai_score"]
+
+    official = [e for e in annotated if e.get("source_tier") in {"official_ticketing", "official_venue"}]
+    discovery = [e for e in annotated if e.get("source_tier") in {"verified_discovery", "standard"}]
+    local = [e for e in annotated if e.get("source_tier") == "local_editorial"]
+
+    local.sort(key=lambda e: (-(e.get("quality_score") or 0), e.get("start_date") or "9999-99-99"))
+
+    # If official/discovery exists, local editorial cannot flood the result set.
+    strong_count = len(official) + len(discovery)
+    if strong_count >= 15:
+        local_cap = 8
+    elif strong_count >= 8:
+        local_cap = 12
+    elif strong_count >= 3:
+        local_cap = 16
+    else:
+        local_cap = 20
+
+    balanced = official + discovery + local[:local_cap]
+
+    # Chronological UX, but same-day priority goes to important/official events.
+    importance_order = {"major": 0, "premium": 1, "verified": 2, "standard": 3, "local": 4, "minor": 5}
+    source_order = {"official_ticketing": 0, "official_venue": 1, "verified_discovery": 2, "standard": 3, "local_editorial": 4}
+    balanced.sort(key=lambda e: (
+        e.get("start_date") or "9999-99-99",
+        importance_order.get(e.get("importance_tier"), 9),
+        source_order.get(e.get("source_tier"), 9),
+        e.get("start_time") or "99:99:99",
+        -(e.get("quality_score") or 0),
+    ))
+    return balanced[:MAX_FINAL_EVENTS]
 
 def dedupe_key(ev: Dict[str, Any]) -> str:
     title = slug(ev.get("title"))
@@ -1116,6 +1251,8 @@ def merge_events(
         )
     )
 
+    result = rebalance_results_v46(result, location, requested_category)
+
     if diagnostics is not None:
         diagnostics["discard_reasons"] = discard_reasons
         diagnostics["accepted_before_dedupe"] = len(cleaned)
@@ -1123,6 +1260,10 @@ def merge_events(
         diagnostics["v40_multi_provider_merge"] = True
         diagnostics["v40_best_price"] = True
         diagnostics["v40_official_source_selection"] = True
+        diagnostics["v46_global_official_premium_first"] = True
+        diagnostics["v47_event_extraction_engine"] = True
+        diagnostics["v47_real_events_only"] = True
+        diagnostics["v46_local_editorial_rebalanced"] = True
 
     return result[:MAX_FINAL_EVENTS]
 
@@ -2213,6 +2354,122 @@ def debug_search_discovery(
 
 
 
+
+
+# =========================
+# V47 EVENT EXTRACTION ENGINE — REAL EVENTS ONLY
+# =========================
+# Critical rule: a web page/listing title is NOT automatically an event.
+# We accept a local/editorial result only when it looks like a real event entity:
+# real title + explicit date + source URL + not an index/category/period label.
+
+GENERIC_EDITORIAL_TITLES_V47 = {
+    "oggi", "domani", "weekend", "questo weekend", "prossimo weekend",
+    "prossima settimana", "questa settimana", "stasera", "eventi", "tutti gli eventi",
+    "cosa fare", "cosa fare a roma", "cosa fare a parigi", "cosa fare a tokyo",
+    "mostre", "concerti", "spettacoli", "teatro", "cinema", "sport", "festival",
+    "eventi a roma", "eventi a parigi", "eventi a tokyo", "calendario eventi",
+}
+
+BAD_EVENT_TITLE_RE_V47 = [
+    r"^\s*(?:oggi|domani|stasera|weekend|questo weekend|prossimo weekend)\s*$",
+    r"^\s*prossima settimana\b",
+    r"^\s*questa settimana\b",
+    r"^\s*(?:lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\s*$",
+    r"^\s*\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\s*(?:20\d{2})?\s*$",
+    r"^\s*\d{1,2}[/-]\d{1,2}(?:[/-]20\d{2})?\s*$",
+    r"^\s*20\d{2}\s*$",
+    r"\b(?:cosa fare|tutti gli eventi|eventi in programma|calendario eventi|guida agli eventi)\b",
+    r"\b(?:prossima settimana|questa settimana|nel weekend|del weekend)\b",
+]
+
+BAD_EVENT_URL_RE_V47 = [
+    r"/eventi/?$",
+    r"/events/?$",
+    r"/what-to-do/?$",
+    r"/whatson/?$",
+    r"/calendario/?$",
+    r"/agenda/?$",
+    r"/tag/",
+    r"/categorie/",
+    r"/category/",
+]
+
+REAL_EVENT_HINT_RE_V47 = [
+    r"\b(?:live|tour|concerto|concert|festival|opera|spettacolo|show|match|partita|finale|final|grand prix|exhibition|mostra|teatro|theatre|dj set|opening|premiere)\b",
+    r"\b(?:ticket|tickets|biglietti|prenota|booking|acquista|buy tickets)\b",
+    r"\b(?:stadio|arena|teatro|auditorium|palazzo|club|hall|dome|museum|museo|venue)\b",
+]
+
+
+def looks_like_index_url_v47(url: str, base_url: str = "") -> bool:
+    u = str(url or "").strip().lower().split("?")[0].rstrip("/") + "/"
+    b = str(base_url or "").strip().lower().split("?")[0].rstrip("/") + "/"
+    if u and b and u == b:
+        return True
+    return any(re.search(p, u, re.I) for p in BAD_EVENT_URL_RE_V47)
+
+
+def is_generic_editorial_title_v47(title: str) -> bool:
+    t = slug(title)
+    if not t:
+        return True
+    if t in GENERIC_EDITORIAL_TITLES_V47:
+        return True
+    if len(t) < 5:
+        return True
+    return any(re.search(p, t, re.I) for p in BAD_EVENT_TITLE_RE_V47)
+
+
+def has_real_event_hint_v47(text: str) -> bool:
+    blob = slug(text)
+    return any(re.search(p, blob, re.I) for p in REAL_EVENT_HINT_RE_V47)
+
+
+def is_real_event_candidate_v47(title: str, text: str, url: str, base_url: str, source_name: str) -> Tuple[bool, str]:
+    """Reject category/index/listing labels before they become event cards."""
+    if is_generic_editorial_title_v47(title):
+        return False, "generic_editorial_title"
+    if looks_like_index_url_v47(url, base_url):
+        return False, "index_or_category_url"
+
+    # Reject pure navigation/listing text even when it contains dates.
+    blob = slug(f"{title} {text}")
+    navigation_noise = [
+        "eventi di oggi", "eventi di domani", "prossima settimana", "calendario",
+        "tutti gli eventi", "cosa fare", "guida", "agenda", "newsletter",
+    ]
+    if any(x in blob for x in navigation_noise) and not has_real_event_hint_v47(blob):
+        return False, "navigation_or_calendar_page"
+
+    # For editorial sources we require either an event hint or a more specific title.
+    # This prevents cards like "1 giugno 2026", "Domani", "Prossima settimana".
+    if not has_real_event_hint_v47(blob):
+        word_count = len([w for w in re.split(r"\s+", slug(title)) if w])
+        if word_count < 3:
+            return False, "not_enough_event_signal"
+
+    return True, "accepted"
+
+
+def post_filter_local_events_v47(events: List[Dict[str, Any]], base_url: str = "") -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for ev in events:
+        ok, reason = is_real_event_candidate_v47(
+            ev.get("title", ""),
+            " ".join([str(ev.get("title", "")), str(ev.get("venue", "")), str(ev.get("subcategory", ""))]),
+            ev.get("source_url") or ev.get("ticket_url") or "",
+            base_url,
+            ev.get("source_name", ""),
+        )
+        if not ok:
+            ev["discarded_reason"] = f"v47_{reason}"
+            log_event_v36(ev, accepted=False, reason=ev["discarded_reason"])
+            continue
+        ev["v47_real_event_extracted"] = True
+        out.append(ev)
+    return out
+
 # =========================
 # V42 LOCAL SOURCES ENGINE — REAL EVENTS ONLY
 # =========================
@@ -2328,6 +2585,10 @@ def parse_jsonld_events_from_html(
             if isinstance(image, dict):
                 image = image.get("url")
             cat, sub = category_from_title(title, "")
+            candidate_url = absolute_url(base_url, node.get("url") or node.get("mainEntityOfPage") or base_url)
+            ok_v47, reason_v47 = is_real_event_candidate_v47(title, json.dumps(node, ensure_ascii=False), candidate_url or "", base_url, source_name)
+            if not ok_v47:
+                continue
             out.append(make_event(
                 title=title,
                 category=cat,
@@ -2338,8 +2599,8 @@ def parse_jsonld_events_from_html(
                 country=country or location.get("country_code") or "",
                 venue=venue,
                 source_name=source_name,
-                source_url=url,
-                ticket_url=url,
+                source_url=candidate_url,
+                ticket_url=candidate_url,
                 image_url=absolute_url(base_url, image) if image else None,
                 extra={"v42_local_source": True, "date_confidence": 0.99},
             ))
@@ -2391,6 +2652,9 @@ def parse_anchor_local_events(
             title = re.split(r"\b(?:dal|dall|fino|sabato|domenica|lunedì|martedì|mercoledì|giovedì|venerdì|\d{1,2}[/-]\d{1,2})\b", text, maxsplit=1, flags=re.I)[0]
             title = clean_text(title[:140])
         if not title or len(title) < 4:
+            continue
+        ok_v47, reason_v47 = is_real_event_candidate_v47(title, text, url or "", base_url, source_name)
+        if not ok_v47:
             continue
         cat, sub = category_from_title(title, "")
         out.append(make_event(
@@ -2465,6 +2729,7 @@ def local_source_events_v42(location: Dict[str, str], from_date: str, to_date: s
             continue
         parsed = parse_jsonld_events_from_html(body, final_url, location, source_name)
         parsed.extend(parse_anchor_local_events(body, final_url, location, source_name, from_date, to_date))
+        parsed = post_filter_local_events_v47(parsed, final_url)
         for ev in parsed:
             if not is_within_dates(ev, from_date, to_date):
                 continue
@@ -2476,6 +2741,7 @@ def local_source_events_v42(location: Dict[str, str], from_date: str, to_date: s
                     # Keep culture/local events when category is broad only.
                     continue
             ev["source_priority"] = "local_editorial"
+            annotate_event_v46(ev)
             out.append(ev)
         time.sleep(0.05)
     # Deduplicate local results before returning.
@@ -2786,30 +3052,34 @@ TICKET_LINK_HINTS = [
 
 TRUSTED_EVENT_DOMAINS_BY_CITY = {
     "roma": [
-        "romatoday.it/eventi", "turismoroma.it", "wantedinrome.com/whatson", "auditorium.com",
-        "operaroma.it", "maxxi.art", "palazzoesposizioniroma.it", "ticketone.it", "eventbrite.it",
-        "dice.fm", "feverup.com", "ra.co/events/it/rome",
+        "ticketone.it", "vivaticket.com", "ticketmaster.it", "auditorium.com", "operaroma.it",
+        "stadiolimpico.it", "asroma.com", "sslazio.it", "maxxi.art", "scuderiequirinale.it",
+        "palazzoesposizioniroma.it", "eventbrite.it", "dice.fm", "feverup.com", "ra.co/events/it/rome",
+        "turismoroma.it", "wantedinrome.com/whatson", "romatoday.it/eventi",
     ],
     "rome": [
-        "romatoday.it/eventi", "turismoroma.it", "wantedinrome.com/whatson", "auditorium.com",
-        "operaroma.it", "maxxi.art", "ticketone.it", "eventbrite.it", "dice.fm", "feverup.com",
+        "ticketone.it", "vivaticket.com", "ticketmaster.it", "auditorium.com", "operaroma.it",
+        "stadiolimpico.it", "asroma.com", "sslazio.it", "maxxi.art", "eventbrite.it", "dice.fm",
+        "feverup.com", "turismoroma.it", "wantedinrome.com/whatson", "romatoday.it/eventi",
     ],
     "paris": [
-        "parisjetaime.com", "sortiraparis.com", "accorarena.com", "philharmoniedeparis.fr",
-        "ticketmaster.fr", "eventbrite.fr", "dice.fm", "feverup.com", "ra.co/events/fr/paris",
+        "ticketmaster.fr", "fnacspectacles.com", "francebillet.com", "accorarena.com",
+        "philharmoniedeparis.fr", "stadefrance.com", "olympiahall.com", "eventbrite.fr",
+        "dice.fm", "feverup.com", "ra.co/events/fr/paris", "parisjetaime.com", "sortiraparis.com",
     ],
     "tokyo": [
-        "tokyocheapo.com/events", "tokyoweekender.com/events", "tokyo-dome.co.jp", "bigsight.jp",
-        "eplus.jp", "t.pia.jp", "l-tike.com", "ticket.rakuten.co.jp", "jleague.jp", "npb.jp",
-        "sumo.or.jp", "anime-japan.jp", "eventbrite.com", "ra.co/events/jp/tokyo",
+        "eplus.jp", "t.pia.jp", "l-tike.com", "ticket.rakuten.co.jp", "tokyo-dome.co.jp",
+        "bigsight.jp", "jleague.jp", "npb.jp", "sumo.or.jp", "anime-japan.jp",
+        "eventbrite.com", "ra.co/events/jp/tokyo", "tokyoweekender.com/events", "tokyocheapo.com/events",
     ],
     "london": [
-        "visitlondon.com", "timeout.com/london", "ticketmaster.co.uk", "dice.fm", "eventbrite.co.uk",
-        "ra.co/events/uk/london", "wembleystadium.com", "theo2.co.uk",
+        "ticketmaster.co.uk", "axs.com", "seetickets.com", "wembleystadium.com", "theo2.co.uk",
+        "royalalberthall.com", "royaloperahouse.org", "dice.fm", "eventbrite.co.uk",
+        "ra.co/events/uk/london", "visitlondon.com", "timeout.com/london",
     ],
     "new york": [
-        "timeout.com/newyork", "nyc.com/events", "ticketmaster.com", "eventbrite.com", "dice.fm",
-        "ra.co/events/us/newyork", "msg.com", "barclayscenter.com",
+        "ticketmaster.com", "msg.com", "barclayscenter.com", "lincolncenter.org", "broadway.com",
+        "eventbrite.com", "dice.fm", "ra.co/events/us/newyork", "nyc.com/events", "timeout.com/newyork",
     ],
 }
 
@@ -3185,7 +3455,7 @@ def get_events(
         td = fd
 
     from_iso, to_iso = fd.isoformat(), td.isoformat()
-    cache_key = "v44-date-ux-chronological|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
+    cache_key = "v46-official-premium-first|" + make_events_cache_key(city, country, from_iso, to_iso, cat)
 
     if use_cache:
         cached = get_events_cache(cache_key)
@@ -3242,6 +3512,9 @@ def get_events(
     diag["v43_ai_search_extraction_engine"] = True
     diag["v44_chronological_sorting"] = True
     diag["v44_year_input_limit_frontend"] = True
+    diag["v46_global_official_premium_first"] = True
+    diag["v46_low_value_editorial_capped"] = True
+    diag["v46_not_rome_only"] = True
     diag["v43_ai_search_extraction"] = v43_diag
     diag["discovery_sources"] = discovery_sources
     diag["empty_state_message"] = (
