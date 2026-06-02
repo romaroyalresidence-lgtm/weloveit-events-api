@@ -42,8 +42,8 @@ SEATGEEK_CLIENT_SECRET = os.getenv("SEATGEEK_CLIENT_SECRET", "").strip()
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "").strip()
 
 DEFAULT_TIMEOUT = 4
-MAX_PROVIDER_EVENTS = 80
-MAX_FINAL_EVENTS = 70
+MAX_PROVIDER_EVENTS = 20
+MAX_FINAL_EVENTS = 24
 
 ITALIAN_OPEN_2026_START = "2026-05-06"
 ITALIAN_OPEN_2026_END = "2026-05-18"
@@ -1547,47 +1547,21 @@ def eventbrite_events(location: Dict[str, str], from_date: str, to_date: str, ca
 
 
 def serpapi_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
+    """FAST MODE: una sola query SerpAPI per evitare blocchi e attese lunghe su Render."""
     city = location["city"]
-    country_name = location["country_name"] or location["country_code"]
+    country_name = location.get("country_name") or location.get("country_code") or ""
     year = from_date[:4] if from_date else str(date.today().year)
 
-    if is_rome(location) and category == "sport":
-        return [
-            f"sport events Roma {year} tickets",
-            f"Roma sport eventi {year} biglietti",
-            f"tennis Foro Italico Roma {year}",
-            f"Internazionali BNL d'Italia {year}",
-            f"Italian Open Rome {year} tickets",
-            f"ATP Rome {year} Foro Italico",
-            f"WTA Rome {year} Foro Italico",
-        ]
-
     if category == "sport":
-        return [
-            f"sports events {city} {year} tickets",
-            f"football {city} {year} tickets",
-            f"tennis {city} {year} tickets",
-            f"rugby {city} {year} tickets",
-            f"boxing {city} {year} tickets",
-            f"basketball {city} {year} tickets",
-            f"NFL {city} {year}",
-            f"MotoGP {city} {year} tickets",
-            f"Formula 1 {city} {year} tickets",
-        ]
+        return [f"sports events {city} {country_name} {year} tickets"]
 
     if category == "concert":
-        return [
-            f"concerts {city} {country_name} {year}",
-            f"music events {city} {country_name} {year}",
-            f"live music {city} {year} tickets",
-        ]
+        return [f"concerts {city} {country_name} {year} tickets"]
 
-    return [
-        f"events {city} {country_name} from {from_date} to {to_date}",
-        f"{city} events {year} official tickets",
-        f"concerts festivals exhibitions sport {city} {year}",
-    ]
+    if category == "culture":
+        return [f"exhibitions theatre events {city} {country_name} {year} tickets"]
 
+    return [f"events {city} {country_name} {year} tickets"]
 
 def parse_serpapi_date(date_obj: Dict[str, Any], from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str]]:
     raw = clean_text((date_obj or {}).get("when") or (date_obj or {}).get("start_date") or "")
@@ -1693,69 +1667,21 @@ def serpapi_events(location: Dict[str, str], from_date: str, to_date: str, categ
 
 
 def search_discovery_queries(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
+    """FAST MODE: query discovery ridotta a una sola ricerca."""
     city = location["city"]
-    country_name = location["country_name"] or location["country_code"]
+    country_name = location.get("country_name") or location.get("country_code") or ""
     year = str((parse_date_safe(from_date) or date.today()).year)
 
-    city_variants = [city]
-    if is_rome(location):
-        city_variants = ["Roma", "Rome"]
-
-    base_terms = []
-
     if category == "sport":
-        base_terms = [
-            "official tickets sport events",
-            "official tickets football rugby tennis boxing basketball",
-            "official schedule tickets",
-        ]
-    elif category == "concert":
-        base_terms = [
-            "official tickets concerts",
-            "live music tickets",
-            "festival tickets",
-        ]
-    elif category == "culture":
-        base_terms = [
-            "official tickets exhibitions theatre events",
-            "museums expo fair tickets",
-        ]
-    else:
-        base_terms = [
-            "official tickets events",
-            "concert sport theatre exhibition tickets",
-        ]
+        return [f"official sport events {city} {country_name} {year} tickets"]
 
-    if is_rome(location):
-        base_terms.extend([
-            f"Internazionali BNL d'Italia {year} official tickets",
-            f"Italian Open Rome {year} Foro Italico official tickets",
-        ])
+    if category == "concert":
+        return [f"official concerts {city} {country_name} {year} tickets"]
 
-    if location.get("country_code") == "JP":
-        jp_terms = [
-            f"site:eplus.jp {city} {year} tickets",
-            f"site:t.pia.jp {city} {year} チケット",
-            f"site:l-tike.com {city} {year} チケット",
-            f"site:ticket.rakuten.co.jp {city} {year} チケット",
-            f"Tokyo Dome {year} tickets",
-            f"Nippon Budokan {year} tickets",
-            f"J League {city} {year} tickets",
-            f"NPB baseball {city} {year} tickets",
-            f"sumo tournament {city} {year} tickets",
-        ]
-        base_terms = jp_terms + base_terms
+    if category == "culture":
+        return [f"official exhibitions theatre events {city} {country_name} {year} tickets"]
 
-    queries: List[str] = []
-    for c in city_variants:
-        for term in base_terms:
-            if c.lower() in term.lower():
-                queries.append(term)
-            else:
-                queries.append(f"{term} {c} {country_name} {year}")
-
-    return list(dict.fromkeys(queries))[:8]
-
+    return [f"official events {city} {country_name} {year} tickets"]
 
 def parse_discovery_date_from_text(text: str, from_date: str, to_date: str) -> Tuple[Optional[str], Optional[str], bool]:
     """
@@ -3376,10 +3302,10 @@ def collect_real_provider_events_v43(
 # - adds Japanese date parser and Japan/Tokyo official portals
 # - does not create synthetic fallback event cards
 
-V48_MAX_GOOGLE_RESULTS_PER_QUERY = int(os.getenv("WELOVEIT_V48_GOOGLE_RESULTS_PER_QUERY", "10"))
-V48_MAX_PAGES_TO_FETCH = int(os.getenv("WELOVEIT_V48_MAX_PAGES_TO_FETCH", "42"))
-V48_MAX_QUERIES = int(os.getenv("WELOVEIT_V48_MAX_QUERIES", "26"))
-V48_MIN_EVENTS_BEFORE_EXPANSION = int(os.getenv("WELOVEIT_V48_MIN_EVENTS_BEFORE_EXPANSION", "12"))
+V48_MAX_GOOGLE_RESULTS_PER_QUERY = int(os.getenv("WELOVEIT_V48_GOOGLE_RESULTS_PER_QUERY", "3"))
+V48_MAX_PAGES_TO_FETCH = int(os.getenv("WELOVEIT_V48_MAX_PAGES_TO_FETCH", "8"))
+V48_MAX_QUERIES = int(os.getenv("WELOVEIT_V48_MAX_QUERIES", "4"))
+V48_MIN_EVENTS_BEFORE_EXPANSION = int(os.getenv("WELOVEIT_V48_MIN_EVENTS_BEFORE_EXPANSION", "4"))
 
 V48_OFFICIAL_GLOBAL_DOMAINS = [
     "ticketmaster", "ticketone", "vivaticket", "eventbrite", "dice.fm", "feverup", "ra.co",
@@ -4188,8 +4114,8 @@ def debug_venue_crawler_v49(
 # especially Tokyo baseball, Japan national rugby, J.League and sumo.
 # V50 adds official sports discovery using Google Events + official-site organic results.
 
-V50_MAX_SPORT_QUERIES = int(os.getenv("WELOVEIT_V50_MAX_SPORT_QUERIES", "16"))
-V50_MAX_SPORT_RESULTS = int(os.getenv("WELOVEIT_V50_MAX_SPORT_RESULTS", "60"))
+V50_MAX_SPORT_QUERIES = int(os.getenv("WELOVEIT_V50_MAX_SPORT_QUERIES", "3"))
+V50_MAX_SPORT_RESULTS = int(os.getenv("WELOVEIT_V50_MAX_SPORT_RESULTS", "10"))
 
 
 def japan_sports_queries_v50(location: Dict[str, str], from_date: str, to_date: str, category: str) -> List[str]:
@@ -4446,6 +4372,18 @@ def collect_real_provider_events_v43(
     }
 
 
+# FAST MODE OVERRIDE — evita V48/V49/V50 crawler pesanti durante la ricerca pubblica.
+def collect_real_provider_events_v43(
+    loc: Dict[str, str],
+    from_iso: str,
+    to_iso: str,
+    cat: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
+    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+    counts["fast_mode"] = True
+    counts["raw_total_fast"] = len(events)
+    return events, counts, {"fast_mode": True, "heavy_crawlers_disabled": True}
+
 @app.get("/debug/japan-sports")
 def debug_japan_sports_v50(
     city: str = Query("Tokyo"),
@@ -4586,66 +4524,34 @@ def get_events(
     return JSONResponse(merged)
 
 
-# -------------------------------------------------------------------
-# COMPATIBILITY ROUTES FOR ARUBA FRONTEND
-# These routes keep the original /events engine untouched, but also
-# accept /api/events and POST JSON from the frontend.
-# -------------------------------------------------------------------
 
-@app.get("/api/events")
-def get_api_events(
-    city: str = Query(...),
-    country: str = Query(""),
-    from_date: str = Query(default_factory=today_iso),
-    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
-    category: str = Query(""),
-    keyword: str = Query(""),
-    diagnostics: bool = Query(False),
-    use_cache: bool = Query(True),
-    write_snapshot: bool = Query(False),
-) -> JSONResponse:
-    return get_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category or keyword,
-        diagnostics=diagnostics,
-        use_cache=use_cache,
-        write_snapshot=write_snapshot,
-    )
+async def _events_from_request(request: Request) -> JSONResponse:
+    try:
+        body = await request.json() if request.method == "POST" else {}
+    except Exception:
+        body = {}
+    q = request.query_params
+    city = body.get("city") or q.get("city") or "Roma"
+    country = body.get("country") or q.get("country") or ""
+    from_date = body.get("from_date") or body.get("startDate") or q.get("from_date") or q.get("startDate") or today_iso()
+    to_date = body.get("to_date") or body.get("endDate") or q.get("to_date") or q.get("endDate") or (date.today() + timedelta(days=30)).isoformat()
+    category = body.get("category") or body.get("keyword") or q.get("category") or q.get("keyword") or ""
+    return get_events(city=city, country=country, from_date=from_date, to_date=to_date, category=category)
 
 
 @app.post("/events")
 async def post_events(request: Request) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    return await _events_from_request(request)
 
-    city = body.get("city") or "Roma"
-    country = body.get("country") or ""
-    from_date = body.get("from_date") or body.get("startDate") or today_iso()
-    to_date = body.get("to_date") or body.get("endDate") or (date.today() + timedelta(days=30)).isoformat()
-    category = body.get("category") or body.get("keyword") or ""
 
-    return get_events(
-        city=city,
-        country=country,
-        from_date=from_date,
-        to_date=to_date,
-        category=category,
-        diagnostics=bool(body.get("diagnostics", False)),
-        use_cache=bool(body.get("use_cache", True)),
-        write_snapshot=bool(body.get("write_snapshot", False)),
-    )
+@app.get("/api/events")
+async def get_api_events(request: Request) -> JSONResponse:
+    return await _events_from_request(request)
 
 
 @app.post("/api/events")
 async def post_api_events(request: Request) -> JSONResponse:
-    return await post_events(request)
-
-
+    return await _events_from_request(request)
 
 @app.get("/debug/events")
 def debug_events(
