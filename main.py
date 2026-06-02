@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -4584,6 +4584,67 @@ def get_events(
         return JSONResponse({"events": merged, "diagnostics": diag})
 
     return JSONResponse(merged)
+
+
+# -------------------------------------------------------------------
+# COMPATIBILITY ROUTES FOR ARUBA FRONTEND
+# These routes keep the original /events engine untouched, but also
+# accept /api/events and POST JSON from the frontend.
+# -------------------------------------------------------------------
+
+@app.get("/api/events")
+def get_api_events(
+    city: str = Query(...),
+    country: str = Query(""),
+    from_date: str = Query(default_factory=today_iso),
+    to_date: str = Query(default_factory=lambda: (date.today() + timedelta(days=30)).isoformat()),
+    category: str = Query(""),
+    keyword: str = Query(""),
+    diagnostics: bool = Query(False),
+    use_cache: bool = Query(True),
+    write_snapshot: bool = Query(False),
+) -> JSONResponse:
+    return get_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category or keyword,
+        diagnostics=diagnostics,
+        use_cache=use_cache,
+        write_snapshot=write_snapshot,
+    )
+
+
+@app.post("/events")
+async def post_events(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    city = body.get("city") or "Roma"
+    country = body.get("country") or ""
+    from_date = body.get("from_date") or body.get("startDate") or today_iso()
+    to_date = body.get("to_date") or body.get("endDate") or (date.today() + timedelta(days=30)).isoformat()
+    category = body.get("category") or body.get("keyword") or ""
+
+    return get_events(
+        city=city,
+        country=country,
+        from_date=from_date,
+        to_date=to_date,
+        category=category,
+        diagnostics=bool(body.get("diagnostics", False)),
+        use_cache=bool(body.get("use_cache", True)),
+        write_snapshot=bool(body.get("write_snapshot", False)),
+    )
+
+
+@app.post("/api/events")
+async def post_api_events(request: Request) -> JSONResponse:
+    return await post_events(request)
+
 
 
 @app.get("/debug/events")
