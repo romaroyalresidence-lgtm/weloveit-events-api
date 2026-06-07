@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-VERSION = "weloveit-events-v49-frontend-safe-images-links"
+VERSION = "weloveit-events-v48-fast-mode"
 
 TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "").strip()
 PREDICT_API_KEY = os.getenv("PREDICT_API_KEY", "").strip()
@@ -41,9 +41,12 @@ SEATGEEK_CLIENT_ID = os.getenv("SEATGEEK_CLIENT_ID", "").strip()
 SEATGEEK_CLIENT_SECRET = os.getenv("SEATGEEK_CLIENT_SECRET", "").strip()
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "").strip()
 
-DEFAULT_TIMEOUT = 12
-MAX_PROVIDER_EVENTS = 80
-MAX_FINAL_EVENTS = 70
+DEFAULT_TIMEOUT = int(os.getenv("WELOVEIT_PROVIDER_TIMEOUT", "5"))
+MAX_PROVIDER_EVENTS = int(os.getenv("WELOVEIT_MAX_PROVIDER_EVENTS", "40"))
+MAX_FINAL_EVENTS = int(os.getenv("WELOVEIT_MAX_FINAL_EVENTS", "40"))
+WELOVEIT_FAST_MODE = os.getenv("WELOVEIT_FAST_MODE", "1").strip().lower() not in {"0", "false", "no"}
+WELOVEIT_FAST_MIN_BEFORE_EVENTBRITE = int(os.getenv("WELOVEIT_FAST_MIN_BEFORE_EVENTBRITE", "8"))
+WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK = os.getenv("WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
 
 ITALIAN_OPEN_2026_START = "2026-05-06"
 ITALIAN_OPEN_2026_END = "2026-05-18"
@@ -600,22 +603,28 @@ def fallback_image_for_event(title: str = "", category: str = "", subcategory: s
 
 
 def enrich_event_visuals(ev: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    V49 frontend-safe image policy:
-    - keep provider images only when a real http(s) image is present;
-    - do NOT inject generic stock/fallback photos into image_url.
-    This prevents wrong visuals such as yoga photos on concerts.
-    The frontend will render a neutral WELOVEIT placeholder when image_url is empty.
-    """
-    raw = clean_text(ev.get("image_url"))
-    if raw.lower().startswith(("http://", "https://")) and not any(
-        bad in raw.lower() for bad in ["placeholder", "default", "undefined", "null"]
-    ):
-        ev["image_url"] = raw
-        ev["image_is_fallback"] = False
-    else:
-        ev["image_url"] = ""
+    # FAST MODE: niente immagini stock inventate.
+    # Se il provider non manda una foto reale, il frontend mostra placeholder premium neutro.
+    if WELOVEIT_FAST_MODE:
+        img = clean_text(ev.get("image_url"))
+        if img.startswith("http") and not any(bad in img.lower() for bad in ["placeholder", "default", "undefined", "noimage", "no-image"]):
+            ev["image_url"] = img
+            ev["image_is_fallback"] = False
+        else:
+            ev["image_url"] = ""
+            ev["image_is_fallback"] = False
+        return ev
+
+    if not ev.get("image_url"):
+        ev["image_url"] = fallback_image_for_event(
+            ev.get("title", ""),
+            ev.get("category", ""),
+            ev.get("subcategory", ""),
+            ev.get("venue", ""),
+        )
         ev["image_is_fallback"] = True
+    else:
+        ev["image_is_fallback"] = False
     return ev
 
 
@@ -2249,6 +2258,9 @@ def root() -> Dict[str, Any]:
         "seatgeek_client_id_present": bool(SEATGEEK_CLIENT_ID),
         "seatgeek_client_secret_present": bool(SEATGEEK_CLIENT_SECRET),
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "fast_mode": WELOVEIT_FAST_MODE,
+        "provider_timeout_seconds": DEFAULT_TIMEOUT,
+        "fast_expensive_fallback_enabled": WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK,
         "eventbrite_mode": "real_api_plus_fallback" if bool(EVENTBRITE_API_KEY) else "fallback_only",
         "v37_hero_images": True,
         "v37_premium_planner": True,
@@ -2307,6 +2319,9 @@ def debug_serpapi(
 
     return {
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "fast_mode": WELOVEIT_FAST_MODE,
+        "provider_timeout_seconds": DEFAULT_TIMEOUT,
+        "fast_expensive_fallback_enabled": WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK,
         "sports_expansion": cat == "sport",
         "ok": True,
         "input": {
@@ -2341,6 +2356,9 @@ def debug_search_discovery(
     return {
         "ok": True,
         "serpapi_api_key_present": bool(SERPAPI_API_KEY),
+        "fast_mode": WELOVEIT_FAST_MODE,
+        "provider_timeout_seconds": DEFAULT_TIMEOUT,
+        "fast_expensive_fallback_enabled": WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK,
         "search_discovery_engine": True,
         "search_discovery_no_fake_dates": True,
         "search_discovery_year_guard": True,
@@ -3758,13 +3776,91 @@ def collect_real_provider_events_v43(
     to_iso: str,
     cat: str,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Any]]:
-    """V48 override: providers first + hybrid extraction. Existing get_events uses this name."""
-    events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
-    v48_events, v48_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
-    events.extend(v48_events)
-    counts["hybrid_discovery_v48"] = len(v48_events)
-    counts["raw_total_with_v48"] = len(events)
-    return events, counts, v48_diag
+    """
+    V48 FAST override.
+
+    Obiettivo: non bloccare Render con 7 provider + discovery in serie.
+    - Ticketmaster subito
+    - Eventbrite solo se Ticketmaster trova pochi risultati
+    - Roma tennis override solo quando pertinente
+    - SerpAPI/Search Discovery/PredictHQ/local scraping saltati nella ricerca normale
+    - il motore V48 completo resta disponibile disattivando WELOVEIT_FAST_MODE=0
+      oppure attivando WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK=1.
+    """
+    if not WELOVEIT_FAST_MODE:
+        events, counts = collect_real_provider_events_v39(loc, from_iso, to_iso, cat)
+        v48_events, v48_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+        events.extend(v48_events)
+        counts["hybrid_discovery_v48"] = len(v48_events)
+        counts["raw_total_with_v48"] = len(events)
+        return events, counts, v48_diag
+
+    all_events: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    seen_raw: set = set()
+
+    def add_many(name: str, events: List[Dict[str, Any]]) -> None:
+        counts[name] = len(events or [])
+        for ev in events or []:
+            key = f"{slug(ev.get('title'))}|{ev.get('start_date')}|{slug(ev.get('venue'))}|{slug(ev.get('source_name'))}"
+            if key in seen_raw:
+                continue
+            seen_raw.add(key)
+            all_events.append(ev)
+
+    # 1) Primo colpo veloce: Ticketmaster, una sola chiamata.
+    # Se la categoria è vuota, NON espandiamo in concert/sport/culture: chiediamo tutto.
+    tm_cat = cat or ""
+    try:
+        add_many(f"ticketmaster_fast_{tm_cat or 'all'}", ticketmaster_events(loc, from_iso, to_iso, tm_cat))
+    except Exception as exc:
+        logger.warning("FAST ticketmaster failed: %s", exc)
+        counts[f"ticketmaster_fast_{tm_cat or 'all'}"] = 0
+
+    # 2) Override Roma tennis solo se sport/tennis o Roma senza categoria; è locale e leggero.
+    try:
+        if is_rome(loc) and (cat in {"", "sport"}):
+            add_many("rome_tennis_override_fast", roma_tennis_override(loc, from_iso, to_iso, "sport"))
+    except Exception as exc:
+        logger.warning("FAST rome tennis override failed: %s", exc)
+        counts["rome_tennis_override_fast"] = 0
+
+    # 3) Eventbrite solo se pochi risultati.
+    if len(all_events) < WELOVEIT_FAST_MIN_BEFORE_EVENTBRITE:
+        try:
+            add_many("eventbrite_fast", eventbrite_events(loc, from_iso, to_iso, cat or ""))
+        except Exception as exc:
+            logger.warning("FAST eventbrite failed: %s", exc)
+            counts["eventbrite_fast"] = 0
+    else:
+        counts["eventbrite_fast"] = 0
+
+    v48_diag: Dict[str, Any] = {
+        "enabled": False,
+        "mode": "V48 FAST MODE",
+        "reason": "Expensive discovery disabled for normal searches",
+        "ticketmaster_first": True,
+        "eventbrite_only_if_sparse": True,
+        "default_timeout_seconds": DEFAULT_TIMEOUT,
+        "min_before_eventbrite": WELOVEIT_FAST_MIN_BEFORE_EVENTBRITE,
+        "expensive_fallback_enabled": WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK,
+    }
+
+    # 4) Fallback costoso solo se lo abiliti esplicitamente e siamo ancora quasi vuoti.
+    if WELOVEIT_FAST_ALLOW_EXPENSIVE_FALLBACK and len(all_events) < 3:
+        try:
+            v48_events, full_diag = ai_search_extraction_events_v43(loc, from_iso, to_iso, cat)
+            add_many("hybrid_discovery_v48_expensive_fallback", v48_events)
+            v48_diag.update(full_diag or {})
+            v48_diag["enabled"] = True
+            v48_diag["mode"] = "V48 expensive fallback after sparse fast results"
+        except Exception as exc:
+            logger.warning("FAST expensive V48 fallback failed: %s", exc)
+            counts["hybrid_discovery_v48_expensive_fallback"] = 0
+
+    counts["raw_total_unique_fast"] = len(all_events)
+    counts["raw_total_with_v48"] = len(all_events)
+    return all_events, counts, v48_diag
 
 
 @app.get("/debug/ai-search-extraction")
@@ -3947,97 +4043,62 @@ def get_events(
     return JSONResponse(merged)
 
 
-
-
-def frontend_event_payload(ev: Dict[str, Any]) -> Dict[str, Any]:
-    """Stable payload for the public frontend."""
-    url = ev.get("ticket_url") or ev.get("official_source_url") or ev.get("source_url") or ""
-    if not is_real_ticket_url(url):
-        url = ""
-
-    image = ev.get("image_url") or ev.get("image") or ""
-    image = clean_text(image)
-    if not image.lower().startswith(("http://", "https://")):
-        image = ""
-
-    return {
-        **ev,
-        "id": ev.get("id") or hashlib.sha1(
-            f"{ev.get('title','')}|{ev.get('start_date','')}|{ev.get('venue','')}".encode("utf-8")
-        ).hexdigest()[:16],
-        "title": ev.get("title") or "Evento",
-        "date": ev.get("start_date") or ev.get("date") or "",
-        "time": ev.get("start_time") or "",
-        "city": ev.get("city") or "",
-        "country": ev.get("country") or "",
-        "venue": ev.get("venue") or "",
-        "category": ev.get("category") or "event",
-        "subcategory": ev.get("subcategory") or "",
-        "image": image,
-        "image_url": image,
-        "url": url,
-        "ticket_url": url,
-        "has_real_image": bool(image),
-        "has_real_ticket_url": bool(url),
-        "source": ev.get("source_name") or ev.get("source") or "",
-    }
-
-
 @app.get("/api/events")
-def get_events_frontend(
-    city: str = Query(...),
+def api_events_compat(
+    city: str = Query(""),
     country: str = Query(""),
     q: str = Query(""),
     keyword: str = Query(""),
     category: str = Query(""),
-    from_date: str = Query(""),
-    to_date: str = Query(""),
     startDate: str = Query(""),
     endDate: str = Query(""),
+    from_date: str = Query(""),
+    to_date: str = Query(""),
     diagnostics: bool = Query(False),
-    use_cache: bool = Query(True),
 ) -> JSONResponse:
+    """Frontend compatibility endpoint for Aruba static site.
+
+    Accepts app.js params: city, q/keyword/category, startDate, endDate.
+    Returns {events, count, diagnostics} instead of a bare list.
     """
-    Frontend-compatible alias.
-    Accepts old frontend names startDate/endDate and q/keyword,
-    calls the real V48/V49 engine, then returns stable fields:
-    image/url/title/date/city/venue/category.
-    """
-    final_category = category or q or keyword
-    final_from = from_date or startDate or today_iso()
-    final_to = to_date or endDate or (date.today() + timedelta(days=30)).isoformat()
+    final_city = clean_text(city) or "Roma"
+    final_from = clean_text(startDate or from_date) or today_iso()
+    final_to = clean_text(endDate or to_date) or (date.today() + timedelta(days=30)).isoformat()
+    final_cat = normalize_category(category or keyword or q)
 
     response = get_events(
-        city=city,
+        city=final_city,
         country=country,
         from_date=final_from,
         to_date=final_to,
-        category=final_category,
+        category=final_cat,
         diagnostics=True,
-        use_cache=use_cache,
+        use_cache=True,
         write_snapshot=False,
     )
+    body = json.loads(response.body.decode("utf-8"))
+    events = body.get("events") if isinstance(body, dict) else body
+    if not isinstance(events, list):
+        events = []
 
-    payload = json.loads(response.body.decode("utf-8"))
-    events = payload.get("events", []) if isinstance(payload, dict) else payload
-    normalized = [frontend_event_payload(ev) for ev in events]
+    # Add aliases expected by simpler frontends, without changing original fields.
+    for ev in events:
+        if isinstance(ev, dict):
+            ev.setdefault("date", ev.get("start_date") or "")
+            ev.setdefault("image", ev.get("image_url") or "")
+            ev.setdefault("url", ev.get("ticket_url") or ev.get("source_url") or "")
+            ev.setdefault("source", ev.get("source_name") or "")
 
-    if diagnostics:
-        diag = payload.get("diagnostics", {}) if isinstance(payload, dict) else {}
-        return JSONResponse({
-            "ok": True,
-            "version": VERSION,
-            "count": len(normalized),
-            "events": normalized,
-            "diagnostics": diag,
-        })
-
-    return JSONResponse({
+    payload: Dict[str, Any] = {
         "ok": True,
         "version": VERSION,
-        "count": len(normalized),
-        "events": normalized,
-    })
+        "mode": "v48_fast_compat",
+        "count": len(events),
+        "events": events,
+    }
+    if diagnostics:
+        payload["diagnostics"] = body.get("diagnostics", {}) if isinstance(body, dict) else {}
+    return JSONResponse(payload)
 
 
 @app.get("/debug/events")
